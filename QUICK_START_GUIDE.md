@@ -92,15 +92,15 @@ This is the easiest way to get started with Screen Recorder. Follow these simple
 
 ### Step 3: Install the Client
 
-1. Open the "ScreenRecorderApp" folder
-2. Open the "client" folder
-3. Create a new file named `license.key`
-4. Open the file with Notepad
-5. Paste the license key from Step 2
-6. Save the file (`Ctrl + S`)
-7. Close Notepad
-8. Right-click `install.bat`
-9. Select "Run as administrator"
+1.  Open the "ScreenRecorderApp" folder
+2.  Open the "client" folder
+3.  Create a new file named `license.key`
+4.  Open the file with Notepad
+5.  Paste the license key from Step 2
+6.  Save the file (`Ctrl + S`)
+7.  Close Notepad
+8.  Right-click `install_client_service.bat`
+9.  Select "Run as administrator"
 10. Click "Yes" if Windows asks for permission
 11. Wait for installation to complete
 
@@ -156,7 +156,7 @@ Videos are stored in: `C:\Program Files\ScreenRecorderServer\uploads\{machine-id
 
 **A:**
 
-- Client: Run `uninstall.bat` in the client folder
+- Client: Run `uninstall_client_service.bat` in the client folder
 - Server: Run `uninstall_server_service.bat` in the server folder
 
 ---

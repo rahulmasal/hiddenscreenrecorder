@@ -14,7 +14,7 @@ if %errorLevel% neq 0 (
 )
 
 :: Set paths
-set INSTALL_DIR=%ProgramFiles%\ScreenRecorderServer
+set INSTALL_DIR=C:\ScreenRecorderServer
 set SCRIPT_DIR=%~dp0
 
 :: Stop service if running

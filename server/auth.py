@@ -91,10 +91,15 @@ def require_auth(f):
                 g.user_id = result["sub"]
                 return f(*args, **kwargs)
             else:
-                return jsonify({"error": result.get("error", "Authentication required")}), 401
+                return (
+                    jsonify({"error": result.get("error", "Authentication required")}),
+                    401,
+                )
 
-        # No valid authentication found
-        return jsonify({"error": "Authentication required"}), 401
+        # No valid authentication found - redirect to login page
+        from flask import redirect, url_for
+
+        return redirect(url_for("admin_login"))
 
     return decorated_function
 
@@ -105,7 +110,9 @@ def require_csrf(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if request.method in ["POST", "PUT", "DELETE"]:
-            token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+            token = request.form.get("csrf_token") or request.headers.get(
+                "X-CSRF-Token"
+            )
             if not auth_manager.validate_csrf_token(token):
                 return jsonify({"error": "Invalid CSRF token"}), 403
         return f(*args, **kwargs)
@@ -149,9 +156,10 @@ def rate_limit(limit: int = 60, window: int = 60):
 
             # Check limit
             if len(_rate_limit_store[key]) >= limit:
-                return jsonify(
-                    {"error": "Rate limit exceeded. Please try again later."}
-                ), 429
+                return (
+                    jsonify({"error": "Rate limit exceeded. Please try again later."}),
+                    429,
+                )
 
             # Record request
             _rate_limit_store[key].append(current_time)
@@ -167,17 +175,17 @@ def validate_admin_password(password: str) -> Tuple[bool, str]:
     """Validate admin password with rate limiting"""
     # Use werkzeug's secure password hashing
     from werkzeug.security import check_password_hash, generate_password_hash
-    
+
     # For backward compatibility, check if password is already hashed
     # If not, hash it and store (this should be done during setup)
     stored_hash = settings.admin_password
-    
+
     # If the stored password looks like a plain text (not a werkzeug hash),
     # we need to hash it. In production, passwords should be pre-hashed.
-    if not stored_hash.startswith(('pbkdf2:', 'scrypt:')):
+    if not stored_hash.startswith(("pbkdf2:", "scrypt:")):
         # Plain text password - hash it for comparison
-        stored_hash = generate_password_hash(stored_hash, method='scrypt')
-    
+        stored_hash = generate_password_hash(stored_hash, method="scrypt")
+
     if check_password_hash(stored_hash, password):
         return True, "Authentication successful"
     return False, "Invalid password"
@@ -204,7 +212,8 @@ def create_session(password: str) -> Tuple[bool, Optional[str]]:
 def hash_password(password: str) -> str:
     """Hash a password using werkzeug's secure hashing"""
     from werkzeug.security import generate_password_hash
-    return generate_password_hash(password, method='scrypt')
+
+    return generate_password_hash(password, method="scrypt")
 
 
 def destroy_session():
@@ -219,26 +228,3 @@ def get_client_ip() -> str:
     elif request.headers.get("X-Real-IP"):
         return request.headers["X-Real-IP"]
     return request.remote_addr or "unknown"
-</task_progress>
-- [ ] Security fixes
-  - [x] Add proper authentication with JWT
-  - [x] Add CSRF protection
-  - [x] Add rate limiting
-  - [ ] Secure license key transmission
-- [ ] Code quality improvements
-  - [ ] Fix bare except clauses
-  - [ ] Add input validation
-  - [ ] Add type hints
-- [ ] Architecture improvements
-  - [x] Add database support with SQLAlchemy
-  - [ ] Restructure server code
-  - [ ] Add API versioning
-- [ ] Add unit tests
-- [ ] Add Docker support
-- [ ] Add API documentation
-- [ ] Client improvements
-  - [ ] Add retry logic
-  - [ ] Add offline queue
-  - [ ] Add heartbeat
-</task_progress>
-</write_to_file>

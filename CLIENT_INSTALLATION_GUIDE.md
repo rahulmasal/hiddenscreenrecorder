@@ -70,14 +70,14 @@ Before starting, make sure you have:
    - Save the file
 
 3. **Run the installation script:**
-   - Right-click on `install.bat`
+   - Right-click on `install_client_service.bat`
    - Select "Run as administrator"
    - If prompted by Windows, click "Yes" to allow
    - Wait for installation to complete
 
 4. **What happens during installation:**
-   - The client is installed to `C:\Program Files\ScreenRecSvc`
-   - A Windows service is created
+   - The client is installed to `C:\ScreenRecorderClient`
+   - A Windows service is created (Service Name: ScreenRecSvc)
    - The service starts automatically
    - Recording begins immediately
 
@@ -91,7 +91,7 @@ Before starting, make sure you have:
 2. **Check the logs:**
 
    ```batch
-   type "%APPDATA%\ScreenRecSvc\service.log"
+   type "C:\ScreenRecorderClient\logs\service.log"
    ```
 
    - You should see messages like "License validated successfully" and "Recording started"
@@ -105,8 +105,9 @@ Before starting, make sure you have:
 
 1. **Edit the configuration file:**
    - Press `Windows Key + R`
-   - Type: `notepad "%APPDATA%\ScreenRecSvc\config.json"`
-   - Press Enter
+
+- Type: `notepad "C:\ScreenRecorderClient\config.json"`
+- Press Enter
 
 2. **Available settings:**
 
@@ -146,7 +147,7 @@ Before starting, make sure you have:
 
 **Solution:**
 
-- Make sure the `license.key` file exists in `C:\Program Files\ScreenRecSvc`
+- Make sure the `license.key` file exists in `C:\ScreenRecorderClient`
 - Check that the license key is correct (no extra spaces or characters)
 - Verify the license hasn't expired on the server
 
@@ -162,7 +163,7 @@ Before starting, make sure you have:
 
 **Solution:**
 
-- Check the logs: `type "%APPDATA%\ScreenRecSvc\service.log"`
+- Check the logs: `type "C:\ScreenRecorderClient\logs\service.log"`
 - Make sure Python is installed
 - Try running the client manually: `python screen_recorder.py`
 
@@ -205,13 +206,13 @@ sc query ScreenRecSvc
 ### View client logs:
 
 ```batch
-type "%APPDATA%\ScreenRecSvc\service.log"
+type "C:\ScreenRecorderClient\logs\service.log"
 ```
 
 ### Uninstall the client:
 
 ```batch
-uninstall.bat
+uninstall_client_service.bat
 ```
 
 ## What Happens After Installation
@@ -219,7 +220,7 @@ uninstall.bat
 1. **Automatic Recording:**
    - The client starts recording immediately
    - Records screen in chunks (default: 1 minute each)
-   - Saves videos to `%APPDATA%\ScreenRecSvc\recordings\`
+   - Saves videos to `C:\ScreenRecorderClient\recordings\`
 
 2. **Automatic Upload:**
    - Videos are uploaded to the server every 5 minutes

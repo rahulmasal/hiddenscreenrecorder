@@ -14,58 +14,90 @@ if %errorLevel% neq 0 (
 )
 
 :: Set paths
-set INSTALL_DIR=%ProgramFiles%\ScreenRecorderServer
+set INSTALL_DIR=C:\ScreenRecorderServer
 set SCRIPT_DIR=%~dp0
 set SERVER_DIR=%SCRIPT_DIR%server
+set SHARED_DIR=%SCRIPT_DIR%shared
 
-:: Create installation directory
-echo Creating installation directory...
+echo Step 1: Creating installation directory...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
+echo Done.
+pause
 
-:: Copy server files
-echo Copying server files...
+echo Step 2: Copying server files...
 xcopy /E /I /Y "%SERVER_DIR%\*" "%INSTALL_DIR%\"
+echo Step 2b: Copying shared files...
+xcopy /E /I /Y "%SHARED_DIR%\*" "%INSTALL_DIR%\shared\"
+echo Done.
+pause
 
-:: Create virtual environment if it doesn't exist
+echo Step 3: Creating virtual environment...
 if not exist "%INSTALL_DIR%\venv" (
-    echo Creating virtual environment...
     python -m venv "%INSTALL_DIR%\venv"
+    echo Virtual environment created.
+) else (
+    echo Virtual environment already exists.
 )
+pause
 
-:: Activate virtual environment and install dependencies
-echo Installing dependencies...
+echo Step 4: Installing dependencies...
 call "%INSTALL_DIR%\venv\Scripts\activate.bat"
-pip install -r "%INSTALL_DIR%\requirements.txt" -q
+pip install -r "%INSTALL_DIR%\requirements.txt"
+echo Done.
+pause
 
-:: Create .env file if it doesn't exist
+echo Step 5: Creating .env file...
 if not exist "%INSTALL_DIR%\.env" (
-    echo Creating default .env file...
     copy "%INSTALL_DIR%\.env.example" "%INSTALL_DIR%\.env"
-    echo.
+    echo .env file created.
     echo IMPORTANT: Edit %INSTALL_DIR%\.env to set your SECRET_KEY and ADMIN_PASSWORD
-    echo.
+) else (
+    echo .env file already exists.
 )
+pause
 
-:: Download NSSM if not present
+echo Step 6: Downloading NSSM...
 if not exist "%SCRIPT_DIR%nssm.exe" (
-    echo Downloading NSSM (Non-Sucking Service Manager)...
-    curl -L -o "%SCRIPT_DIR%nssm.zip" https://nssm.cc/release/nssm-2.24.zip 2>nul
-    if exist "%SCRIPT_DIR%nssm.zip" (
-        tar -xf "%SCRIPT_DIR%nssm.zip" -C "%SCRIPT_DIR%" 2>nul
-        copy "%SCRIPT_DIR%nssm-2.24\win64\nssm.exe" "%SCRIPT_DIR%nssm.exe" 2>nul
-        rmdir /s /q "%SCRIPT_DIR%nssm-2.24" 2>nul
-        del "%SCRIPT_DIR%nssm.zip" 2>nul
-    ) else (
-        echo WARNING: Could not download NSSM. Please download manually from https://nssm.cc
-        echo Place nssm.exe in %SCRIPT_DIR% and run this script again.
+    echo Downloading NSSM from https://nssm.cc/release/nssm-2.24.zip...
+    curl -L -o "%SCRIPT_DIR%nssm.zip" https://nssm.cc/release/nssm-2.24.zip
+    if not exist "%SCRIPT_DIR%nssm.zip" (
+        echo ERROR: Failed to download NSSM.
+        echo.
+        echo Please download NSSM manually:
+        echo 1. Go to https://nssm.cc/download
+        echo 2. Download nssm-2.24.zip
+        echo 3. Extract nssm.exe from the win64 folder
+        echo 4. Place nssm.exe in: %SCRIPT_DIR%
+        echo 5. Run this script again
         pause
         exit /b 1
     )
+    echo Extracting NSSM...
+    cd /d "%SCRIPT_DIR%"
+    tar -xf nssm.zip
+    if not exist "%SCRIPT_DIR%nssm-2.24\win64\nssm.exe" (
+        echo ERROR: Failed to extract NSSM properly.
+        echo.
+        echo Please download NSSM manually:
+        echo 1. Go to https://nssm.cc/download
+        echo 2. Download nssm-2.24.zip
+        echo 3. Extract nssm.exe from the win64 folder
+        echo 4. Place nssm.exe in: %SCRIPT_DIR%
+        echo 5. Run this script again
+        pause
+        exit /b 1
+    )
+    copy "%SCRIPT_DIR%nssm-2.24\win64\nssm.exe" "%SCRIPT_DIR%nssm.exe"
+    rmdir /s /q "%SCRIPT_DIR%nssm-2.24"
+    del "%SCRIPT_DIR%nssm.zip"
+    echo NSSM downloaded successfully.
+) else (
+    echo NSSM already exists.
 )
+pause
 
-:: Install Windows service
-echo Installing Windows service...
+echo Step 7: Installing Windows service...
 "%SCRIPT_DIR%nssm.exe" install ScreenRecorderServer "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\app.py"
 "%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppDirectory "%INSTALL_DIR%"
 "%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer DisplayName "Screen Recorder Server"
@@ -77,10 +109,24 @@ echo Installing Windows service...
 "%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateOnline 1
 "%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateSeconds 86400
 "%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateBytes 1048576
+echo Service installed.
+pause
 
-:: Start service
-echo Starting service...
+echo Step 8: Starting service...
+sc start ScreenRecorderServer
+if %errorLevel% neq 0 (
+    echo ERROR: Failed to start service. Error code: %errorLevel%
+    echo Check the service logs at: %INSTALL_DIR%\logs\
+    pause
+    exit /b 1
+)
+echo Service started.
+pause
+
+echo Step 8: Starting service...
 "%SCRIPT_DIR%nssm.exe" start ScreenRecorderServer
+echo Service started.
+pause
 
 echo.
 echo ================================================

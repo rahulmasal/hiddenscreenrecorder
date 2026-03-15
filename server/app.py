@@ -13,7 +13,10 @@ from flask import Flask, render_template, redirect, url_for, flash, session, req
 from flask_cors import CORS
 
 # Add shared module to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "shared"))
+# Use absolute path to shared directory
+# When running as service, shared directory is in the same directory as app.py
+shared_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared")
+sys.path.insert(0, shared_path)
 
 # Import local modules
 from config import settings
@@ -26,17 +29,16 @@ from license_manager import LicenseManager
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, settings.log_level),
-    format=settings.log_format
+    level=getattr(logging, settings.log_level), format=settings.log_format
 )
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
 app.secret_key = settings.secret_key
-app.config['MAX_CONTENT_LENGTH'] = settings.max_content_length
-app.config['SQLALCHEMY_DATABASE_URI'] = settings.database_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["MAX_CONTENT_LENGTH"] = settings.max_content_length
+app.config["SQLALCHEMY_DATABASE_URI"] = settings.database_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Enable CORS
 CORS(app)
@@ -50,6 +52,7 @@ app.register_blueprint(legacy_bp)
 
 
 # ============ Key Management ============
+
 
 def init_keys():
     """Initialize RSA keys for license signing"""
@@ -82,14 +85,15 @@ license_manager.load_private_key(PRIVATE_KEY)
 
 # ============ Template Creation ============
 
+
 def create_templates():
     """Create HTML templates"""
     templates_dir = Path(__file__).parent / "templates"
     templates_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Templates are created only if they don't exist
     templates = {
-        "login.html": '''<!DOCTYPE html>
+        "login.html": """<!DOCTYPE html>
 <html>
 <head>
     <title>Admin Login - Screen Recorder Server</title>
@@ -121,8 +125,8 @@ def create_templates():
         </div>
     </div>
 </body>
-</html>''',
-        "dashboard.html": '''<!DOCTYPE html>
+</html>""",
+        "dashboard.html": """<!DOCTYPE html>
 <html>
 <head>
     <title>Dashboard - Screen Recorder Server</title>
@@ -235,8 +239,8 @@ def create_templates():
         </div>
     </div>
 </body>
-</html>''',
-        "generate_license.html": '''<!DOCTYPE html>
+</html>""",
+        "generate_license.html": """<!DOCTYPE html>
 <html>
 <head>
     <title>Generate License - Screen Recorder Server</title>
@@ -285,8 +289,8 @@ def create_templates():
         </div>
     </div>
 </body>
-</html>''',
-        "license_result.html": '''<!DOCTYPE html>
+</html>""",
+        "license_result.html": """<!DOCTYPE html>
 <html>
 <head>
     <title>License Generated - Screen Recorder Server</title>
@@ -328,8 +332,8 @@ def create_templates():
     }
     </script>
 </body>
-</html>''',
-        "client.html": '''<!DOCTYPE html>
+</html>""",
+        "client.html": """<!DOCTYPE html>
 <html>
 <head>
     <title>Client {{ machine_id }} - Screen Recorder Server</title>
@@ -370,15 +374,15 @@ def create_templates():
         {% endif %}
     </div>
 </body>
-</html>'''
+</html>""",
     }
-    
+
     for name, content in templates.items():
         template_path = templates_dir / name
         if not template_path.exists():
             with open(template_path, "w") as f:
                 f.write(content)
-    
+
     # Add datetime filter
     app.jinja_env.filters["datetime"] = lambda x: (
         datetime.fromtimestamp(x).strftime("%Y-%m-%d %H:%M:%S") if x else "N/A"
@@ -390,15 +394,15 @@ create_templates()
 
 # ============ Admin Routes ============
 
+
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     """Admin login page"""
     error = None
     if request.method == "POST":
-        from flask import request
         password = request.form.get("password")
         csrf_token = request.form.get("csrf_token")
-        
+
         # Validate CSRF
         if not auth_manager.validate_csrf_token(csrf_token):
             error = "Invalid CSRF token"
@@ -408,8 +412,10 @@ def admin_login():
                 return redirect(url_for("admin_dashboard"))
             else:
                 error = "Invalid password"
-    
-    return render_template("login.html", error=error, csrf_token=auth_manager.generate_csrf_token())
+
+    return render_template(
+        "login.html", error=error, csrf_token=auth_manager.generate_csrf_token()
+    )
 
 
 @app.route("/admin/logout")
@@ -424,52 +430,67 @@ def admin_logout():
 def admin_dashboard():
     """Admin dashboard"""
     from flask import request
-    
+
     # Get statistics from database
-    clients = db.session.execute(
-        db.select(Client).order_by(Client.last_seen.desc())
-    ).scalars().all()
-    
-    licenses = db.session.execute(
-        db.select(License).where(License.is_active == True)
-    ).scalars().all()
-    
-    total_videos = db.session.execute(
-        db.select(db.func.count(Video.id))
-    ).scalar() or 0
-    
-    total_size = db.session.execute(
-        db.select(db.func.sum(Video.file_size))
-    ).scalar() or 0
-    
+    clients = (
+        db.session.execute(db.select(Client).order_by(Client.last_seen.desc()))
+        .scalars()
+        .all()
+    )
+
+    licenses = (
+        db.session.execute(db.select(License).where(License.is_active == True))
+        .scalars()
+        .all()
+    )
+
+    total_videos = db.session.execute(db.select(db.func.count(Video.id))).scalar() or 0
+
+    total_size = (
+        db.session.execute(db.select(db.func.sum(Video.file_size))).scalar() or 0
+    )
+
     # Get client video counts
     client_data = []
     for client in clients:
-        video_count = db.session.execute(
-            db.select(db.func.count(Video.id)).where(Video.client_id == client.id)
-        ).scalar() or 0
-        
-        storage = db.session.execute(
-            db.select(db.func.sum(Video.file_size)).where(Video.client_id == client.id)
-        ).scalar() or 0
-        
-        client_data.append({
-            "machine_id": client.machine_id,
-            "video_count": video_count,
-            "total_size": storage,
-            "last_seen": client.last_seen
-        })
-    
+        video_count = (
+            db.session.execute(
+                db.select(db.func.count(Video.id)).where(Video.client_id == client.id)
+            ).scalar()
+            or 0
+        )
+
+        storage = (
+            db.session.execute(
+                db.select(db.func.sum(Video.file_size)).where(
+                    Video.client_id == client.id
+                )
+            ).scalar()
+            or 0
+        )
+
+        client_data.append(
+            {
+                "machine_id": client.machine_id,
+                "video_count": video_count,
+                "total_size": storage,
+                "last_seen": client.last_seen,
+            }
+        )
+
     return render_template(
         "dashboard.html",
         clients=client_data,
-        licenses=[{
-            "machine_id": l.machine_id,
-            "expires_at": l.expires_at.isoformat() if l.expires_at else "",
-        } for l in licenses],
+        licenses=[
+            {
+                "machine_id": l.machine_id,
+                "expires_at": l.expires_at.isoformat() if l.expires_at else "",
+            }
+            for l in licenses
+        ],
         total_videos=total_videos,
         total_size=total_size,
-        total_clients=len(clients)
+        total_clients=len(clients),
     )
 
 
@@ -478,48 +499,51 @@ def admin_dashboard():
 def generate_license():
     """Generate a new license"""
     from flask import request
-    
+
     if request.method == "POST":
         machine_id = request.form.get("machine_id")
         expiry_days = int(request.form.get("expiry_days", 365))
         features = request.form.getlist("features")
-        
+
         if not machine_id:
             flash("Machine ID is required", "error")
             return redirect(url_for("generate_license"))
-        
+
         # Generate license
         features_dict = {
             "recording": "recording" in features,
             "upload": "upload" in features,
         }
-        
+
         license_key = license_manager.generate_license(
             machine_id, expiry_days=expiry_days, features=features_dict
         )
-        
+
         # Save to database
         from datetime import timedelta
+
         license_obj = License(
             machine_id=machine_id,
             license_key=license_key,
             expires_at=datetime.utcnow() + timedelta(days=expiry_days),
-            features=features_dict
+            features=features_dict,
         )
         db.session.add(license_obj)
         db.session.commit()
-        
+
         license_info = {
             "machine_id": machine_id,
             "license_key": license_key,
             "expires_at": (datetime.utcnow() + timedelta(days=expiry_days)).isoformat(),
-            "features": features_dict
+            "features": features_dict,
         }
-        
+
         flash("License generated successfully", "success")
         return render_template("license_result.html", license_info=license_info)
-    
-    return render_template("generate_license.html", csrf_token=auth_manager.generate_csrf_token())
+
+    return render_template(
+        "generate_license.html", csrf_token=auth_manager.generate_csrf_token()
+    )
 
 
 @app.route("/admin/clients/<machine_id>")
@@ -529,21 +553,26 @@ def view_client(machine_id):
     client = db.session.execute(
         db.select(Client).where(Client.machine_id == machine_id)
     ).scalar_one_or_none()
-    
+
     if not client:
         flash("Client not found", "error")
         return redirect(url_for("admin_dashboard"))
-    
-    videos = db.session.execute(
-        db.select(Video).where(Video.client_id == client.id).order_by(Video.upload_time.desc())
-    ).scalars().all()
-    
-    video_data = [{
-        "filename": v.filename,
-        "size": v.file_size,
-        "created": v.upload_time
-    } for v in videos]
-    
+
+    videos = (
+        db.session.execute(
+            db.select(Video)
+            .where(Video.client_id == client.id)
+            .order_by(Video.upload_time.desc())
+        )
+        .scalars()
+        .all()
+    )
+
+    video_data = [
+        {"filename": v.filename, "size": v.file_size, "created": v.upload_time}
+        for v in videos
+    ]
+
     return render_template("client.html", machine_id=machine_id, videos=video_data)
 
 
@@ -552,13 +581,13 @@ def view_client(machine_id):
 def download_video(machine_id, filename):
     """Download a video file"""
     from flask import send_file
-    
+
     filepath = settings.upload_folder / machine_id / filename
-    
+
     if not filepath.exists():
         flash("File not found", "error")
         return redirect(url_for("view_client", machine_id=machine_id))
-    
+
     return send_file(filepath, as_attachment=True)
 
 
@@ -569,14 +598,14 @@ def delete_license(machine_id):
     license_obj = db.session.execute(
         db.select(License).where(License.machine_id == machine_id)
     ).scalar_one_or_none()
-    
+
     if license_obj:
         db.session.delete(license_obj)
         db.session.commit()
         flash("License deleted", "success")
     else:
         flash("License not found", "error")
-    
+
     return redirect(url_for("admin_dashboard"))
 
 
@@ -585,7 +614,7 @@ def delete_license(machine_id):
 def delete_video(machine_id, filename):
     """Delete a video file"""
     filepath = settings.upload_folder / machine_id / filename
-    
+
     if filepath.exists():
         filepath.unlink()
         # Also delete from database
@@ -598,7 +627,7 @@ def delete_video(machine_id, filename):
         flash("Video deleted", "success")
     else:
         flash("File not found", "error")
-    
+
     return redirect(url_for("view_client", machine_id=machine_id))
 
 
@@ -607,29 +636,6 @@ def delete_video(machine_id, filename):
 if __name__ == "__main__":
     port = settings.port
     debug = settings.debug
-    
+
     logger.info(f"Starting server on port {port}")
     app.run(host=settings.host, port=port, debug=debug)
-</task_progress>
-- [x] Security fixes
-  - [x] Add proper authentication with JWT
-  - [x] Add CSRF protection
-  - [x] Add rate limiting
-  - [x] Secure license key transmission
-- [x] Code quality improvements
-  - [x] Fix bare except clauses
-  - [x] Add input validation
-  - [x] Add type hints throughout
-- [x] Architecture improvements
-  - [x] Add database support with SQLAlchemy
-  - [x] Restructure server code with blueprints
-  - [x] Add API versioning
-- [x] Add unit tests
-- [x] Add Docker support
-- [x] Add API documentation
-- [x] Client improvements
-  - [x] Add retry logic
-  - [x] Add offline queue
-  - [x] Add heartbeat
-</task_progress>
-</write_to_file>
