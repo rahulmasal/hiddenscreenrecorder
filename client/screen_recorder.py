@@ -42,7 +42,7 @@ try:
     import hashlib
     import queue
     import random
-    from datetime import datetime
+    from datetime import datetime, timezone
     from io import BytesIO
     from typing import Optional, Dict, Any, List, Tuple
     from dataclasses import dataclass, field
@@ -255,7 +255,7 @@ class OfflineQueue:
             )
             self._remove_oldest_until_fits(video_size)
 
-        task = UploadTask(video_path=video_path, timestamp=datetime.utcnow())
+        task = UploadTask(video_path=video_path, timestamp=datetime.now(timezone.utc))
         self.queue.append(task)
         self._save_queue()
         logger.info(
@@ -361,12 +361,12 @@ class HeartbeatManager:
             response = requests.post(
                 url,
                 headers=headers,
-                json={"timestamp": datetime.utcnow().isoformat()},
+                json={"timestamp": datetime.now(timezone.utc).isoformat()},
                 timeout=10,
             )
 
             if response.status_code == 200:
-                self.last_heartbeat = datetime.utcnow()
+                self.last_heartbeat = datetime.now(timezone.utc)
                 self.server_reachable = True
                 logger.debug("[HEARTBEAT] Heartbeat successful")
             else:
@@ -486,9 +486,9 @@ class ScreenRecorder:
             logger.error(f"[LICENSE] License validation failed: {result}")
             return False, result
 
-    def get_screen_size(self) -> Tuple[int, int]:
+    def get_screen_size(self, sct) -> Tuple[int, int]:
         """Get the primary monitor size"""
-        monitor = self.sct.monitors[1]  # Primary monitor
+        monitor = sct.monitors[1]  # Primary monitor
         return monitor["width"], monitor["height"]
 
     def _get_video_path(self) -> Path:
@@ -567,7 +567,7 @@ class ScreenRecorder:
         fps = self.config.recording_fps
         chunk_duration = self.config.chunk_duration
 
-        width, height = self.get_screen_size()
+        width, height = self.get_screen_size(sct)
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
         chunk_start_time = time.time()
@@ -675,7 +675,7 @@ class ScreenRecorder:
                             f"[UPLOAD] Attempting upload of completed chunk: {video_path.name} ({file_size} bytes)"
                         )
                         task = UploadTask(
-                            video_path=video_path, timestamp=datetime.utcnow()
+                            video_path=video_path, timestamp=datetime.now(timezone.utc)
                         )
                         success = self._upload_video_with_retry(task)
                         if success:
