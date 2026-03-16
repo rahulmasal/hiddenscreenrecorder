@@ -22,9 +22,9 @@ set SHARED_DIR=%SCRIPT_DIR%shared
 echo Step 1: Creating installation directory...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
-if not exist "%APPDATA%\ScreenRecSvc" mkdir "%APPDATA%\ScreenRecSvc"
-if not exist "%APPDATA%\ScreenRecSvc\recordings" mkdir "%APPDATA%\ScreenRecSvc\recordings"
-if not exist "%APPDATA%\ScreenRecSvc\offline_queue" mkdir "%APPDATA%\ScreenRecSvc\offline_queue"
+if not exist "%INSTALL_DIR%\ScreenRecSvc" mkdir "%INSTALL_DIR%\ScreenRecSvc"
+if not exist "%INSTALL_DIR%\ScreenRecSvc\recordings" mkdir "%INSTALL_DIR%\ScreenRecSvc\recordings"
+if not exist "%INSTALL_DIR%\ScreenRecSvc\offline_queue" mkdir "%INSTALL_DIR%\ScreenRecSvc\offline_queue"
 echo Done.
 pause
 
@@ -55,7 +55,7 @@ if "%SERVER_IP%"=="" (
     set SERVER_IP=localhost
 )
 echo Creating config file with server URL: http://%SERVER_IP%:5000
-set CONFIG_DIR=%PROGRAMDATA%\ScreenRecSvc
+set CONFIG_DIR=%INSTALL_DIR%\ScreenRecSvc
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
 (
     echo {"server_url": "http://%SERVER_IP%:5000"}

@@ -21,8 +21,8 @@ else:
 
 # Configure logging - stdout only, NSSM captures it to service.log
 # (same pattern as server/app.py - logging.basicConfig with no file handler)
-# Use ProgramData (non-user-specific) so the path is the same when running as SYSTEM service
-LOG_DIR = Path(os.environ.get("PROGRAMDATA", tempfile.gettempdir())) / "ScreenRecSvc"
+# Store all data in the same directory as the executable/script for portability
+LOG_DIR = Path(__file__).parent / "ScreenRecSvc"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
