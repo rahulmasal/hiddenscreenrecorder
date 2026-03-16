@@ -577,6 +577,11 @@ class ScreenRecorder:
             str(video_path), fourcc, fps, (width, height)
         )
 
+        # Check if video writer opened successfully
+        if not self.video_writer.isOpened():
+            logger.error(f"[RECORD] Failed to open video writer for {video_path}")
+            return
+
         logger.info(
             f"[RECORD] Started new video chunk: {video_path.name} (resolution: {width}x{height}, fps: {fps})"
         )
@@ -587,6 +592,25 @@ class ScreenRecorder:
                 # Capture screen
                 screenshot = sct.grab(sct.monitors[1])
                 frame = np.array(screenshot)
+
+                # Validate we got a valid frame
+                if frame.size == 0:
+                    logger.warning("[RECORD] Captured empty frame")
+                    time.sleep(1.0 / fps)
+                    continue
+
+                # Log frame properties occasionally for debugging
+                if frames_captured == 0:
+                    logger.info(
+                        f"[RECORD] Frame properties: shape={frame.shape}, dtype={frame.dtype}"
+                    )
+                    # Sample a few pixel values to see if we're getting valid data
+                    if frame.shape[0] > 10 and frame.shape[1] > 10:
+                        sample = frame[5:10, 5:10]
+                        logger.info(
+                            f"[RECORD] Sample pixel values (BGRA): {sample.flatten()[:12]}"
+                        )
+
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
                 # Write frame
@@ -614,6 +638,12 @@ class ScreenRecorder:
                     self.video_writer = cv2.VideoWriter(
                         str(video_path), fourcc, fps, (width, height)
                     )
+                    # Check if new video writer opened successfully
+                    if not self.video_writer.isOpened():
+                        logger.error(
+                            f"[RECORD] Failed to open video writer for {video_path}"
+                        )
+                        return
                     logger.info(f"[RECORD] Started new video chunk: {video_path.name}")
                     frames_captured = 0
 
