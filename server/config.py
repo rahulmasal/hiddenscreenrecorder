@@ -6,7 +6,7 @@ import os
 import secrets
 from pathlib import Path
 from typing import Optional, Set
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
 
 
@@ -75,10 +75,11 @@ class Settings(BaseSettings):
             return secrets.token_hex(32)
         return v
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
 
 
 # Global settings instance - lazy initialization

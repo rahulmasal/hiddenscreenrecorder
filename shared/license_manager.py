@@ -7,7 +7,7 @@ import hashlib
 import base64
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.backends import default_backend
@@ -98,8 +98,10 @@ class LicenseManager:
         # Create license data
         license_data = {
             "machine_id": machine_id,
-            "issued_at": datetime.utcnow().isoformat(),
-            "expires_at": (datetime.utcnow() + timedelta(days=expiry_days)).isoformat(),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (
+                datetime.now(timezone.utc) + timedelta(days=expiry_days)
+            ).isoformat(),
             "features": features or {"recording": True, "upload": True},
             "nonce": secrets.token_hex(16),
         }
@@ -165,7 +167,7 @@ class LicenseManager:
 
             # Check expiration
             expires_at = datetime.fromisoformat(license_data["expires_at"])
-            if datetime.utcnow() > expires_at:
+            if datetime.now(timezone.utc) > expires_at:
                 return False, "License has expired"
 
             # Verify machine ID if provided
