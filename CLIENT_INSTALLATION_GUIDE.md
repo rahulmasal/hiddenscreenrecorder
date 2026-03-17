@@ -121,7 +121,17 @@ Before starting, make sure you have:
      "heartbeat_interval": 60,
      "max_offline_storage_mb": 1000,
      "retry_base_delay": 1.0,
-     "retry_max_delay": 300.0
+     "retry_max_delay": 300.0,
+     "monitor_selection": 1,
+     "region_x": 0,
+     "region_y": 0,
+     "region_width": 0,
+     "region_height": 0,
+     "enable_audio": false,
+     "audio_sample_rate": 44100,
+     "enable_compression": true,
+     "compression_quality": 23,
+     "use_websocket": false
    }
    ```
 
@@ -130,6 +140,12 @@ Before starting, make sure you have:
    - `recording_fps`: Lower for less CPU usage (e.g., 5)
    - `video_quality`: Lower for smaller files (e.g., 60)
    - `chunk_duration`: Longer for fewer files (e.g., 300 for 5 minutes)
+   - `monitor_selection`: Which monitor to record (1=primary, 2=secondary)
+   - `region_x`, `region_y`: Offset for recording a specific region
+   - `region_width`, `region_height`: Dimensions of recording region (0=full screen)
+   - `enable_audio`: Set to `true` to record audio (requires PyAudio)
+   - `enable_compression`: Set to `true` for smaller video files
+   - `compression_quality`: FFmpeg CRF value (lower=better quality, 18-28 recommended)
 
 4. **Save the file:**
    - Press `Ctrl + S`

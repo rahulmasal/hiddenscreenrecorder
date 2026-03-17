@@ -54,18 +54,7 @@ if exist "%INSTALL_DIR%" (
 )
 pause
 
-echo Step 4: Cleaning up ScreenRecSvc directory in installation folder...
-set SCVCDIR=%INSTALL_DIR%\ScreenRecSvc
-if exist "%SCVCDIR%" (
-    echo Removing ScreenRecSvc directory: %SCVCDIR%
-    rmdir /s /q "%SCVCDIR%"
-    echo ScreenRecSvc directory removed.
-) else (
-    echo ScreenRecSvc directory not found: %SCVCDIR%
-)
-pause
-
-echo Step 5: Cleaning up AppData directory...
+echo Step 4: Cleaning up AppData directory...
 set APPDATA_DIR=%APPDATA%\ScreenRecSvc
 if exist "%APPDATA_DIR%" (
     echo Removing AppData directory: %APPDATA_DIR%

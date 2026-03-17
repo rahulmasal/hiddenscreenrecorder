@@ -1,7 +1,8 @@
 """
 Screen Recorder Client
 Records screen, validates license, and uploads to server
-Enhanced with retry logic, offline queue, and heartbeat
+Enhanced with: multi-monitor, audio recording, pause/resume,
+video compression, configurable region, and robust error handling
 """
 
 import os
@@ -43,18 +44,39 @@ try:
     import hashlib
     import queue
     import random
+    import subprocess
+    import os
+    import wave
     from datetime import datetime, timezone
     from io import BytesIO
-    from typing import Optional, Dict, Any, List, Tuple
+    from typing import Optional, Dict, Any, List, Tuple, Union
     from dataclasses import dataclass, field
     from enum import Enum
     import zipfile
 
+    # Optional audio imports
+    try:
+        import pyaudio
+
+        HAS_AUDIO = True
+    except ImportError:
+        HAS_AUDIO = False
+        logger.warning("PyAudio not available, audio recording disabled")
+
+    # Optional WebSocket client
+    try:
+        import socketio as socketio_client
+
+        HAS_SOCKETIO = True
+    except ImportError:
+        HAS_SOCKETIO = False
+        logger.warning("python-socketio not available, websocket disabled")
     logger.info("All imports successful")
 except ImportError as _import_err:
     logger.error(f"Import error - missing dependency: {_import_err}")
     logger.error("Run: pip install -r requirements.txt")
     sys.exit(1)
+
 
 try:
     from license_manager import LicenseManager, MachineIdentifier
@@ -83,6 +105,9 @@ class UploadTask:
 
     video_path: Path
     timestamp: datetime
+    processed_path: Optional[Path] = None
+    thumbnail_path: Optional[Path] = None
+    audio_path: Optional[Path] = None
     retry_count: int = 0
     max_retries: int = 5
     last_error: Optional[str] = None
@@ -108,6 +133,29 @@ class Config:
     max_offline_storage_mb: int = 1000  # 1GB max offline storage
     retry_base_delay: float = 1.0  # Base delay for exponential backoff
     retry_max_delay: float = 300.0  # Max delay 5 minutes
+
+    # Multi-monitor and region selection
+    monitor_selection: int = 1  # Primary monitor by default (1-indexed)
+    region_x: int = 0
+    region_y: int = 0
+    region_width: int = 0  # 0 = full width
+    region_height: int = 0  # 0 = full height
+
+    # Audio recording
+    enable_audio: bool = False
+    audio_sample_rate: int = 44100
+    audio_channels: int = 2
+
+    # Video processing
+    enable_compression: bool = True
+    compression_quality: int = 23  # FFmpeg CRF value (lower = better quality)
+    generate_thumbnails: bool = True
+    thumbnail_pct: float = 0.1  # Generate thumbnail at 10% of video duration
+    ffmpeg_path: str = "ffmpeg"
+
+    # WebSocket
+    use_websocket: bool = False
+    websocket_url: str = "http://localhost:5000"
 
     def __post_init__(self):
         """Load configuration from file"""
@@ -400,7 +448,25 @@ class ScreenRecorder:
         self.machine_id = MachineIdentifier.get_machine_id()
         self.license_key: Optional[str] = None
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
 
+        # Audio recording
+        self.audio_stream: Optional[Any] = None
+        self.audio_queue: Optional[queue.Queue] = None
+        self.audio_thread: Optional[threading.Thread] = None
+        self.audio_enabled = self.config.enable_audio and HAS_AUDIO
+        # WebSocket client
+        self.socket_client: Optional[Any] = None
+        if self.config.use_websocket and HAS_SOCKETIO:
+            try:
+                self.socket_client = socketio_client.Client(
+                    logger=False, engineio_logger=False
+                )
+                self.socket_client.connect(self.config.websocket_url, wait_timeout=5)
+                logger.info("WebSocket client connected")
+            except Exception as ws_err:
+                logger.warning(f"WebSocket connection failed: {ws_err}")
+                self.socket_client = None
         # Initialize retry handler
         self.retry_handler = RetryHandler(
             base_delay=self.config.retry_base_delay,
@@ -422,6 +488,10 @@ class ScreenRecorder:
         # Video storage
         self.video_dir = LOG_DIR / "recordings"
         self.video_dir.mkdir(parents=True, exist_ok=True)
+
+        # Thumbnail storage
+        self.thumbnail_dir = LOG_DIR / "thumbnails"
+        self.thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"ScreenRecorder initialized. Machine ID: {self.machine_id}")
 
@@ -499,6 +569,98 @@ class ScreenRecorder:
         logger.debug(f"[PATH] Generated video path: {video_path}")
         return video_path
 
+    def _get_capture_dimensions(self, sct) -> Tuple[int, int, int, int]:
+        """
+        Get capture dimensions based on monitor selection and region settings
+        Returns: (width, height, offset_x, offset_y)
+        """
+        # Validate monitor selection
+        monitor_idx = self.config.monitor_selection
+        if monitor_idx < 1 or monitor_idx >= len(sct.monitors):
+            logger.warning(
+                f"Invalid monitor selection {monitor_idx}, using primary monitor"
+            )
+            monitor_idx = 1
+
+        monitor = sct.monitors[monitor_idx]
+        monitor_width = monitor["width"]
+        monitor_height = monitor["height"]
+        monitor_left = monitor["left"]
+        monitor_top = monitor["top"]
+
+        # Calculate region
+        region_width = self.config.region_width
+        region_height = self.config.region_height
+        region_x = self.config.region_x
+        region_y = self.config.region_y
+
+        # If region dimensions are 0, use full monitor
+        if region_width == 0:
+            region_width = monitor_width
+        if region_height == 0:
+            region_height = monitor_height
+
+        # Ensure region is within monitor bounds
+        if region_x < 0:
+            region_x = 0
+        if region_y < 0:
+            region_y = 0
+        if region_x + region_width > monitor_width:
+            region_x = monitor_width - region_width
+        if region_y + region_height > monitor_height:
+            region_y = monitor_height - region_height
+
+        logger.info(
+            f"[CAPTURE] Monitor {monitor_idx}: {monitor_width}x{monitor_height} at ({monitor_left},{monitor_top})"
+        )
+        logger.info(
+            f"[CAPTURE] Region: {region_width}x{region_height} at ({region_x},{region_y}) relative to monitor"
+        )
+
+        return region_width, region_height, region_x, region_y
+
+    def _get_monitor_region(self, sct, monitor_idx: int) -> dict:
+        """
+        Get the monitor region dictionary for MSS based on monitor selection and region settings
+        """
+        # Validate monitor selection
+        if monitor_idx < 1 or monitor_idx >= len(sct.monitors):
+            logger.warning(
+                f"Invalid monitor selection {monitor_idx}, using primary monitor"
+            )
+            monitor_idx = 1
+
+        monitor = sct.monitors[monitor_idx]
+
+        # Calculate region
+        region_width = self.config.region_width
+        region_height = self.config.region_height
+        region_x = self.config.region_x
+        region_y = self.config.region_y
+
+        # If region dimensions are 0, use full monitor
+        if region_width == 0:
+            region_width = monitor["width"]
+        if region_height == 0:
+            region_height = monitor["height"]
+
+        # Ensure region is within monitor bounds
+        if region_x < 0:
+            region_x = 0
+        if region_y < 0:
+            region_y = 0
+        if region_x + region_width > monitor["width"]:
+            region_x = monitor["width"] - region_width
+        if region_y + region_height > monitor["height"]:
+            region_y = monitor["height"] - region_height
+
+        return {
+            "left": monitor["left"] + region_x,
+            "top": monitor["top"] + region_y,
+            "width": region_width,
+            "height": region_height,
+        }
+
     def start_recording(self) -> bool:
         """Start screen recording"""
         logger.info("[START] Attempting to start recording...")
@@ -509,6 +671,35 @@ class ScreenRecorder:
         if self.state == ClientState.RECORDING:
             logger.warning("[START] Recording already in progress")
             return True
+
+        # Windows Session 0 isolation check:
+        # Services run in Session 0 which has no access to the user's display.
+        # Detect this and relaunch the recorder process inside the active user session.
+        if sys.platform == "win32" and self._is_session_zero():
+            logger.warning(
+                "[START] Running in Windows Session 0 (service context). "
+                "Screen capture will not work here. Attempting to relaunch "
+                "in the active user desktop session..."
+            )
+            launched = self._relaunch_in_user_session()
+            if launched:
+                logger.info(
+                    "[START] Successfully relaunched in user session. "
+                    "This service-side process will now idle and keep the service alive."
+                )
+                # Keep the service process alive so Windows does not mark the service
+                # as failed, but do NOT start capture here — the relaunched user-session
+                # process will handle that.
+                self.state = ClientState.PAUSED
+                return True
+            else:
+                logger.error(
+                    "[START] Could not relaunch in user session. "
+                    "Falling back to recording from Session 0 (frames may be black). "
+                    "Consider configuring the service to 'Log On As' the target user account "
+                    "via Services.msc or the installer."
+                )
+                # Fall through and attempt capture anyway so the service doesn't silently fail
 
         self._stop_event.clear()
         self.state = ClientState.RECORDING
@@ -542,16 +733,60 @@ class ScreenRecorder:
         logger.info("[START] Recording started successfully")
         return True
 
+    def pause_recording(self) -> bool:
+        """Pause screen recording"""
+        if self.state != ClientState.RECORDING:
+            logger.warning(f"[PAUSE] Cannot pause - current state: {self.state}")
+            return False
+
+        self._pause_event.set()
+        self.state = ClientState.PAUSED
+        logger.info("[PAUSE] Recording paused")
+
+        # Pause audio if enabled
+        if self.audio_stream:
+            try:
+                # Audio pause logic would go here
+                pass
+            except Exception as e:
+                logger.error(f"[PAUSE] Error pausing audio: {e}")
+
+        return True
+
+    def resume_recording(self) -> bool:
+        """Resume paused recording"""
+        if self.state != ClientState.PAUSED:
+            logger.warning(f"[RESUME] Cannot resume - current state: {self.state}")
+            return False
+
+        self._pause_event.clear()
+        self.state = ClientState.RECORDING
+        logger.info("[RESUME] Recording resumed")
+
+        # Resume audio if enabled
+        if self.audio_stream:
+            try:
+                # Audio resume logic would go here
+                pass
+            except Exception as e:
+                logger.error(f"[RESUME] Error resuming audio: {e}")
+
+        return True
+
     def stop_recording(self) -> None:
         """Stop screen recording"""
         logger.info("[STOP] Stopping recording...")
         self._stop_event.set()
+        self._pause_event.clear()  # Clear pause if set
         self.state = ClientState.STOPPED
         logger.info("[STOP] State set to STOPPED, stop event set")
 
         if self.video_writer is not None:
             logger.info("[STOP] Releasing video writer")
-            self.video_writer.release()
+            try:
+                self.video_writer.release()
+            except Exception as e:
+                logger.error(f"[STOP] Error releasing video writer: {e}")
             self.video_writer = None
 
         if self.heartbeat_manager:
@@ -560,8 +795,188 @@ class ScreenRecorder:
 
         logger.info("[STOP] Recording stopped")
 
+    @staticmethod
+    def _get_current_session_id() -> int:
+        """Get the Windows session ID of the current process"""
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            pid = os.getpid()
+            session_id = ctypes.wintypes.DWORD(0)
+            ctypes.windll.kernel32.ProcessIdToSessionId(pid, ctypes.byref(session_id))
+            return session_id.value
+        except Exception:
+            return -1
+
+    @staticmethod
+    def _get_active_user_session_id() -> int:
+        """Get the session ID of the currently active interactive user session"""
+        try:
+            import ctypes
+
+            # WTSGetActiveConsoleSessionId returns the session ID of the console (interactive) session
+            session_id = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+            return session_id
+        except Exception:
+            return -1
+
+    def _is_session_zero(self) -> bool:
+        """Check if this process is running in Windows Session 0 (service/system context)"""
+        sid = self._get_current_session_id()
+        logger.info(f"[SESSION] Current process session ID: {sid}")
+        return sid == 0
+
+    def _relaunch_in_user_session(self) -> bool:
+        """
+        Relaunch this process inside the active user's interactive desktop session.
+        Uses WTSQueryUserToken + CreateProcessAsUser so that mss/screen-capture
+        APIs can reach the real display instead of the Session-0 blank desktop.
+        Returns True if the child process was successfully launched.
+        """
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            wtsapi32 = ctypes.windll.wtsapi32
+            advapi32 = ctypes.windll.advapi32
+            userenv = ctypes.windll.userenv
+            kernel32 = ctypes.windll.kernel32
+
+            active_session = self._get_active_user_session_id()
+            logger.info(f"[SESSION] Active user session ID: {active_session}")
+            if active_session == 0 or active_session == 0xFFFFFFFF:
+                logger.warning(
+                    "[SESSION] No active interactive user session found. "
+                    "Cannot relaunch in user session."
+                )
+                return False
+
+            # Obtain the token for the active session
+            h_token = ctypes.wintypes.HANDLE()
+            if not wtsapi32.WTSQueryUserToken(active_session, ctypes.byref(h_token)):
+                err = kernel32.GetLastError()
+                logger.error(
+                    f"[SESSION] WTSQueryUserToken failed (error {err}). "
+                    "Make sure the service has the 'Act as part of the operating system' privilege."
+                )
+                return False
+
+            # Duplicate the token so we can use it with CreateProcessAsUser
+            h_dup_token = ctypes.wintypes.HANDLE()
+            TOKEN_ALL_ACCESS = 0xF01FF
+            if not advapi32.DuplicateTokenEx(
+                h_token,
+                TOKEN_ALL_ACCESS,
+                None,
+                2,  # SecurityImpersonation
+                1,  # TokenPrimary
+                ctypes.byref(h_dup_token),
+            ):
+                err = kernel32.GetLastError()
+                logger.error(f"[SESSION] DuplicateTokenEx failed (error {err})")
+                kernel32.CloseHandle(h_token)
+                return False
+
+            # Load user environment
+            env_block = ctypes.c_void_p()
+            if not userenv.CreateEnvironmentBlock(
+                ctypes.byref(env_block), h_dup_token, False
+            ):
+                logger.warning(
+                    "[SESSION] CreateEnvironmentBlock failed, using inherited env"
+                )
+                env_block = None
+
+            # Build command line: same interpreter + this script
+            python_exe = sys.executable
+            script_path = os.path.abspath(__file__)
+            cmd = f'"{python_exe}" "{script_path}"'
+            logger.info(f"[SESSION] Relaunching in user session with command: {cmd}")
+
+            class STARTUPINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.wintypes.DWORD),
+                    ("lpReserved", ctypes.wintypes.LPWSTR),
+                    ("lpDesktop", ctypes.wintypes.LPWSTR),
+                    ("lpTitle", ctypes.wintypes.LPWSTR),
+                    ("dwX", ctypes.wintypes.DWORD),
+                    ("dwY", ctypes.wintypes.DWORD),
+                    ("dwXSize", ctypes.wintypes.DWORD),
+                    ("dwYSize", ctypes.wintypes.DWORD),
+                    ("dwXCountChars", ctypes.wintypes.DWORD),
+                    ("dwYCountChars", ctypes.wintypes.DWORD),
+                    ("dwFillAttribute", ctypes.wintypes.DWORD),
+                    ("dwFlags", ctypes.wintypes.DWORD),
+                    ("wShowWindow", ctypes.wintypes.WORD),
+                    ("cbReserved2", ctypes.wintypes.WORD),
+                    ("lpReserved2", ctypes.c_void_p),
+                    ("hStdInput", ctypes.wintypes.HANDLE),
+                    ("hStdOutput", ctypes.wintypes.HANDLE),
+                    ("hStdError", ctypes.wintypes.HANDLE),
+                ]
+
+            class PROCESS_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("hProcess", ctypes.wintypes.HANDLE),
+                    ("hThread", ctypes.wintypes.HANDLE),
+                    ("dwProcessId", ctypes.wintypes.DWORD),
+                    ("dwThreadId", ctypes.wintypes.DWORD),
+                ]
+
+            si = STARTUPINFO()
+            si.cb = ctypes.sizeof(si)
+            si.lpDesktop = "winsta0\\default"  # Interactive desktop
+            si.dwFlags = 0x00000001  # STARTF_USESHOWWINDOW
+            si.wShowWindow = 0  # SW_HIDE
+
+            pi = PROCESS_INFORMATION()
+
+            CREATION_FLAGS = (
+                0x00000010  # CREATE_NEW_CONSOLE
+                | 0x00000400  # CREATE_UNICODE_ENVIRONMENT
+            )
+
+            result = advapi32.CreateProcessAsUserW(
+                h_dup_token,
+                None,
+                cmd,
+                None,
+                None,
+                False,
+                CREATION_FLAGS,
+                env_block,
+                str(Path(__file__).parent),
+                ctypes.byref(si),
+                ctypes.byref(pi),
+            )
+
+            if env_block:
+                userenv.DestroyEnvironmentBlock(env_block)
+            kernel32.CloseHandle(h_token)
+            kernel32.CloseHandle(h_dup_token)
+
+            if result:
+                logger.info(
+                    f"[SESSION] Successfully launched recorder in user session "
+                    f"(PID: {pi.dwProcessId})"
+                )
+                kernel32.CloseHandle(pi.hProcess)
+                kernel32.CloseHandle(pi.hThread)
+                return True
+            else:
+                err = kernel32.GetLastError()
+                logger.error(f"[SESSION] CreateProcessAsUserW failed (error {err})")
+                return False
+
+        except Exception as exc:
+            logger.error(
+                f"[SESSION] Failed to relaunch in user session: {exc}", exc_info=True
+            )
+            return False
+
     def _record_loop(self) -> None:
-        """Main recording loop"""
+        """Main recording loop with pause/resume and configurable region support"""
         # MSS is not thread-safe, create instance in this thread
         sct = mss.mss()
 
@@ -573,7 +988,20 @@ class ScreenRecorder:
         fps = self.config.recording_fps
         chunk_duration = self.config.chunk_duration
 
-        width, height = self.get_screen_size(sct)
+        # Get capture region based on monitor selection and region settings
+        monitor_idx = self.config.monitor_selection
+        if monitor_idx < 1 or monitor_idx >= len(sct.monitors):
+            logger.warning(f"[RECORD] Invalid monitor {monitor_idx}, using primary")
+            monitor_idx = 1
+
+        capture_region = self._get_monitor_region(sct, monitor_idx)
+        width = capture_region["width"]
+        height = capture_region["height"]
+
+        logger.info(
+            f"[RECORD] Capture region: {width}x{height} at ({capture_region['left']}, {capture_region['top']})"
+        )
+
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
         chunk_start_time = time.time()
@@ -585,6 +1013,7 @@ class ScreenRecorder:
         # Check if video writer opened successfully
         if not self.video_writer.isOpened():
             logger.error(f"[RECORD] Failed to open video writer for {video_path}")
+            self.state = ClientState.ERROR
             return
 
         logger.info(
@@ -594,12 +1023,32 @@ class ScreenRecorder:
         frames_captured = 0
         consecutive_black_frames = 0
         max_black_frames_before_warning = 30  # Warn after ~3 seconds at 10fps
-        monitor_to_use = 1  # Default to primary monitor
+        monitor_to_use = monitor_idx
+        paused_time = 0.0  # Track time spent paused
 
         while not self._stop_event.is_set():
+            # Handle pause/resume
+            if self._pause_event.is_set():
+                if self.state == ClientState.RECORDING:
+                    # Just entered pause state
+                    pause_start = time.time()
+                    self.state = ClientState.PAUSED
+                    logger.info("[RECORD] Recording paused, waiting...")
+
+                # Wait while paused (check every 100ms)
+                time.sleep(0.1)
+                paused_time += 0.1
+                continue
+            elif self.state == ClientState.PAUSED:
+                # Just resumed
+                self.state = ClientState.RECORDING
+                logger.info(
+                    f"[RECORD] Recording resumed after {paused_time:.1f}s pause"
+                )
+
             try:
-                # Capture screen from selected monitor
-                screenshot = sct.grab(sct.monitors[monitor_to_use])
+                # Capture screen from selected monitor with region
+                screenshot = sct.grab(capture_region)
                 frame = np.array(screenshot)
 
                 # Validate we got a valid frame

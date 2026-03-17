@@ -113,18 +113,13 @@ echo Service installed.
 pause
 
 echo Step 8: Starting service...
-sc start ScreenRecorderServer
+"%SCRIPT_DIR%nssm.exe" start ScreenRecorderServer
 if %errorLevel% neq 0 (
     echo ERROR: Failed to start service. Error code: %errorLevel%
     echo Check the service logs at: %INSTALL_DIR%\logs\
     pause
     exit /b 1
 )
-echo Service started.
-pause
-
-echo Step 8: Starting service...
-"%SCRIPT_DIR%nssm.exe" start ScreenRecorderServer
 echo Service started.
 pause
 

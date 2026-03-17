@@ -17,8 +17,11 @@
 │  │      (Hidden)          │  │                 │  │      (app.py)          │  │
 │  │                        │  │                 │  │                        │  │
 │  │  • Captures screen     │  │                 │  │  • Receives videos     │  │
-│  │  • Records to MP4      │  │                 │  │  • Validates licenses  │  │
-│  │  • Validates license   │  │                 │  │  • Serves dashboard    │  │
+│  │  • Multi-monitor       │  │                 │  │  • Validates licenses  │  │
+│  │  • Region selection    │  │                 │  │  • Serves dashboard    │  │
+│  │  • Audio recording     │  │                 │  │  • Video streaming     │  │
+│  │  • Pause/Resume        │  │                 │  │  • Thumbnails          │  │
+│  │  • Video compression   │  │                 │  │  • WebSocket support   │  │
 │  │  • Offline queue       │  │                 │  │  • Rate limiting       │  │
 │  │  • Heartbeat           │  │                 │  │  • CSRF protection     │  │
 │  │  • Retry logic         │  │                 │  │                        │  │
@@ -26,20 +29,22 @@
 │             │                │                 │             │                │
 │             ▼                │                 │             ▼                │
 │  ┌────────────────────────┐  │                 │  ┌────────────────────────┐  │
-│  │   2. Local Storage     │  │                 │  │   2. Database          │  │
-│  │   %APPDATA%/           │  │   HTTP POST     │  │   (SQLite)             │  │
-│  │   ScreenRecSvc/        │  │  ──────────────►│  │                        │  │
+│  │   2. Local Storage     │  │   HTTP POST     │  │   2. Database          │  │
+│  │   %APPDATA%/           │  │  ──────────────►│  │   (SQLite)             │  │
+│  │   ScreenRecSvc/        │  │                 │  │                        │  │
 │  │   recordings/          │  │                 │  │   • Clients            │  │
 │  │   offline_queue/       │  │                 │  │   • Licenses           │  │
-│  │   • rec_001.mp4        │  │                 │  │   • Videos             │  │
-│  │   • rec_002.mp4        │  │                 │  │   • AuditLogs          │  │
+│  │   thumbnails/          │  │                 │  │   • Videos             │  │
+│  │   • rec_001.mp4        │  │                 │  │   • AuditLogs          │  │
+│  │   • rec_002.mp4        │  │                 │  │                        │  │
 │  └────────────────────────┘  │                 │  └────────────────────────┘  │
 │                              │                 │                              │
 │  ┌────────────────────────┐  │                 │  ┌────────────────────────┐  │
 │  │   3. License File      │  │                 │  │   3. Upload Storage    │  │
 │  │   license.key          │  │                 │  │   server/uploads/      │  │
 │  │   (Validates client)   │  │                 │  │   {machine_id}/        │  │
-│  └────────────────────────┘  │                 │  └────────────────────────┘  │
+│  └────────────────────────┘  │                 │  │   thumbnails/          │  │
+│                              │                 │  └────────────────────────┘  │
 │                              │                 │                              │
 │  ┌────────────────────────┐  │                 │  ┌────────────────────────┐  │
 │  │   4. Heartbeat Thread  │  │                 │  │   4. Admin Dashboard   │  │
@@ -48,8 +53,9 @@
 │                              │                 │  │                        │  │
 │                              │                 │  │   • View all clients   │  │
 │                              │                 │  │   • Generate licenses  │  │
-│                              │                 │  │   • Download videos    │  │
-│                              │                 │  │   • Delete videos      │  │
+│                              │                 │  │   • Stream videos      │  │
+│                              │                 │  │   • View thumbnails    │  │
+│                              │                 │  │   • Real-time status   │  │
 │                              │                 │  └────────────────────────┘  │
 └──────────────────────────────┘                 └──────────────────────────────┘
 ```
@@ -75,6 +81,7 @@ This will:
 │   └── Tables: clients, licenses, videos, audit_logs
 ├── Create directories:
 │   ├── uploads/     (for video storage)
+│   ├── thumbnails/  (for video thumbnails)
 │   ├── licenses/    (for license storage)
 │   └── keys/        (for RSA keys)
 └── Start Flask server on port 5000
@@ -126,7 +133,15 @@ Create config.json on client:
     "heartbeat_interval": 60,
     "max_offline_storage_mb": 1000,
     "retry_base_delay": 1.0,
-    "retry_max_delay": 300.0
+    "retry_max_delay": 300.0,
+    "monitor_selection": 1,
+    "region_x": 0,
+    "region_y": 0,
+    "region_width": 0,
+    "region_height": 0,
+    "enable_audio": false,
+    "enable_compression": true,
+    "use_websocket": false
 }
 ```
 
@@ -142,7 +157,9 @@ When client starts (screen_recorder.py):
    ├── Load configuration from config.json
    ├── Initialize logging to %APPDATA%/ScreenRecSvc/
    ├── Initialize offline queue manager
-   └── Initialize retry handler
+   ├── Initialize retry handler
+   ├── Initialize monitor manager (detect monitors)
+   └── Initialize audio recorder (if enabled)
 
 2. VALIDATION PHASE
    ├── Load license.key from disk
@@ -152,12 +169,24 @@ When client starts (screen_recorder.py):
    ├── Verify machine ID matches
    └── If invalid → Exit silently
 
-3. RECORDING PHASE (if license valid)
+3. MONITOR DETECTION PHASE
+   ├── Detect all connected monitors
+   ├── Validate monitor_selection config
+   ├── Get capture region dimensions
+   │   ├── Apply region_x, region_y offsets
+   │   ├── Apply region_width, region_height
+   │   └── Validate bounds within monitor
+   └── Log capture configuration
+
+4. RECORDING PHASE (if license valid)
    ├── Initialize screen capture (mss library)
    ├── Get monitor resolution
    ├── Create video writer (OpenCV)
+   │   └── Format: MP4 (mp4v codec)
    ├── Start recording loop:
-   │   ├── Capture screen frame
+   │   ├── Check pause state
+   │   │   └── If paused → Wait, track paused time
+   │   ├── Capture screen frame from selected monitor
    │   ├── Convert BGRA → BGR
    │   ├── Write frame to video
    │   ├── Check chunk duration
@@ -165,21 +194,32 @@ When client starts (screen_recorder.py):
    │   └── Sleep (1/fps seconds)
    └── Continue until stopped
 
-4. HEARTBEAT PHASE (background thread)
+5. AUDIO RECORDING PHASE (if enabled)
+   ├── Initialize PyAudio
+   ├── Open audio stream
+   │   └── Sample rate: 44100 Hz, Channels: 2
+   ├── Record audio in separate thread
+   ├── On chunk complete:
+   │   ├── Save audio to WAV file
+   │   └── Merge with video (optional)
+   └── Continue until stopped
+
+6. HEARTBEAT PHASE (background thread)
    ├── Every 60 seconds (configurable)
    ├── POST to: http://server:5000/api/v1/heartbeat
    ├── Include: license key, machine ID
    ├── Update server_reachable flag
    └── Log connection status
 
-5. STORAGE PHASE
+7. STORAGE PHASE
    ├── Save videos to: %APPDATA%/ScreenRecSvc/recordings/
    │   ├── rec_20260312_210000_a1b2c3d4.mp4
    │   ├── rec_20260312_210100_a1b2c3d4.mp4
    │   └── ...
+   ├── Save thumbnails to: %APPDATA%/ScreenRecSvc/thumbnails/
    └── Videos stored locally before upload
 
-6. UPLOAD PHASE (background thread)
+8. UPLOAD PHASE (background thread)
    ├── Every 5 minutes (configurable)
    ├── First, process offline queue:
    │   ├── Get next pending video
@@ -192,7 +232,7 @@ When client starts (screen_recorder.py):
    ├── On success → Delete local copy
    └── On failure → Add to offline queue
 
-7. RETRY LOGIC
+9. RETRY LOGIC
    ├── Exponential backoff with jitter
    ├── Base delay: 1 second
    ├── Max delay: 300 seconds (5 minutes)
@@ -201,6 +241,13 @@ When client starts (screen_recorder.py):
        ├── ConnectionError
        ├── Timeout
        └── HTTP 5xx errors
+
+10. VIDEO COMPRESSION (if enabled)
+    ├── Check for FFmpeg availability
+    ├── Compress video with CRF quality
+    │   └── Default CRF: 23 (configurable)
+    ├── Fallback to OpenCV if FFmpeg unavailable
+    └── Save compressed video for upload
 ```
 
 ### PHASE 4: Server Processing
@@ -235,6 +282,10 @@ When server receives a request:
 4. PROCESSING
    ├── Save video to uploads/{machine_id}/
    ├── Create database record
+   ├── Generate thumbnail (async)
+   │   ├── Extract frame at 10% duration
+   │   ├── Resize to 320x240
+   │   └── Save as JPEG
    ├── Log audit entry
    └── Return success response
 ```
@@ -247,6 +298,9 @@ Step 7: Server Video Storage
 
 Videos stored on server at:
 server/uploads/{machine_id}/
+
+Thumbnails stored at:
+server/uploads/thumbnails/
 
 Database (SQLite):
 ├── clients
@@ -272,9 +326,113 @@ uploads/
 │   ├── 20260312_210000_rec_001.mp4
 │   ├── 20260312_210500_rec_002.mp4
 │   └── ...
-├── b2c3d4e5f6g7h8i9j0k1l2m3n4o5p7/
+├── thumbnails/
+│   ├── 20260312_210000_rec_001_thumb.jpg
 │   └── ...
 └── ...
+```
+
+---
+
+## New Features Workflow
+
+### Multi-Monitor Recording
+
+```
+Monitor Selection Process:
+─────────────────────────
+
+1. Client starts
+2. Monitor Manager initializes
+3. Detect all connected monitors:
+   ├── Monitor 0: Virtual (all monitors combined)
+   ├── Monitor 1: Primary (1920x1080)
+   ├── Monitor 2: Secondary (2560x1440)
+   └── ...
+4. Read monitor_selection from config
+5. Validate selection:
+   ├── If valid → Use selected monitor
+   └── If invalid → Fall back to primary (1)
+6. Apply region settings:
+   ├── region_x, region_y: Offset from top-left
+   ├── region_width, region_height: Capture dimensions
+   └── If 0 → Use full monitor dimensions
+7. Start capture from selected region
+```
+
+### Pause/Resume Recording
+
+```
+Pause/Resume Flow:
+──────────────────
+
+1. Recording active (state: RECORDING)
+2. User/API requests pause
+3. Set _pause_event
+4. State changes to PAUSED
+5. Recording thread:
+   ├── Detects pause event
+   ├── Stops capturing frames
+   └── Waits in loop (100ms intervals)
+6. User/API requests resume
+7. Clear _pause_event
+8. State changes to RECORDING
+9. Recording thread:
+   ├── Detects resume
+   ├── Logs paused duration
+   └── Resumes frame capture
+```
+
+### Video Streaming
+
+```
+Video Streaming Flow:
+─────────────────────
+
+1. Client requests: GET /api/v1/stream/{machine_id}/{filename}
+2. Server validates machine_id and filename
+3. Check if video exists
+4. Parse Range header (if present)
+5. If Range header:
+   ├── Extract start, end bytes
+   ├── Seek to start position
+   ├── Stream requested range
+   └── Return 206 Partial Content
+6. If no Range header:
+   ├── Stream entire file
+   └── Return 200 OK
+7. Response includes:
+   ├── Content-Type: video/mp4
+   ├── Accept-Ranges: bytes
+   ├── Content-Length: file/range size
+   └── Content-Range: bytes start-end/total
+```
+
+### Thumbnail Generation
+
+```
+Thumbnail Generation Flow:
+──────────────────────────
+
+1. Video uploaded to server
+2. Thumbnail request received
+3. Check for existing thumbnail
+4. If exists → Return cached thumbnail
+5. If not exists:
+   ├── Initialize VideoProcessor
+   ├── Check FFmpeg availability
+   ├── If FFmpeg available:
+   │   ├── Get video duration
+   │   ├── Calculate timestamp (10% of duration)
+   │   ├── Extract frame at timestamp
+   │   └── Resize to 320x240
+   ├── Else (OpenCV fallback):
+   │   ├── Open video with cv2.VideoCapture
+   │   ├── Seek to target frame
+   │   ├── Read frame
+   │   └── Resize
+   ├── Save as JPEG
+   └── Return thumbnail
 ```
 
 ---
@@ -283,29 +441,33 @@ uploads/
 
 ### Client PC
 
-| File/Folder              | Location                               | Purpose             |
-| ------------------------ | -------------------------------------- | ------------------- |
-| ScreenRecorderClient.exe | C:\Program Files\ScreenRecSvc\         | Main executable     |
-| license.key              | C:\Program Files\ScreenRecSvc\         | License file        |
-| config.json              | C:\Program Files\ScreenRecSvc\         | Configuration       |
-| Recordings (temp)        | %APPDATA%\ScreenRecSvc\recordings\     | Local video storage |
-| Offline Queue            | %APPDATA%\ScreenRecSvc\offline_queue\  | Pending uploads     |
-| Logs                     | %APPDATA%\ScreenRecSvc\service.log     | Debug logs          |
+| File/Folder              | Location                               | Purpose              |
+| ------------------------ | -------------------------------------- | -------------------- |
+| ScreenRecorderClient.exe | C:\Program Files\ScreenRecSvc\         | Main executable      |
+| license.key              | C:\Program Files\ScreenRecSvc\         | License file         |
+| config.json              | C:\Program Files\ScreenRecSvc\         | Configuration        |
+| Recordings (temp)        | %APPDATA%\ScreenRecSvc\recordings\     | Local video storage  |
+| Offline Queue            | %APPDATA%\ScreenRecSvc\offline_queue\  | Pending uploads      |
+| Thumbnails               | %APPDATA%\ScreenRecSvc\thumbnails\     | Generated thumbnails |
+| Logs                     | %APPDATA%\ScreenRecSvc\service.log     | Debug logs           |
 
 ### Server PC
 
-| File/Folder       | Location                     | Purpose                       |
-| ----------------- | ---------------------------- | ----------------------------- |
-| app.py            | server/                      | Main server script            |
-| config.py         | server/                      | Configuration management      |
-| models.py         | server/                      | Database models               |
-| auth.py           | server/                      | Authentication & CSRF         |
-| validators.py     | server/                      | Input validation              |
-| routes/api.py     | server/routes/               | API endpoints                 |
-| private_key.pem   | server/keys/                 | License signing key (SECRET!) |
-| public_key.pem    | server/keys/                 | License validation key        |
-| screenrecorder.db | server/data/                 | SQLite database               |
-| Uploaded Videos   | server/uploads/{machine_id}/ | Video storage                 |
+| File/Folder          | Location                     | Purpose                       |
+| -------------------- | ---------------------------- | ----------------------------- |
+| app.py               | server/                      | Main server script            |
+| config.py            | server/                      | Configuration management      |
+| models.py            | server/                      | Database models               |
+| auth.py              | server/                      | Authentication & CSRF         |
+| validators.py        | server/                      | Input validation              |
+| video_processor.py   | server/                      | Thumbnail generation          |
+| websocket_manager.py | server/                      | WebSocket support             |
+| routes/api.py        | server/routes/               | API endpoints                 |
+| private_key.pem      | server/keys/                 | License signing key (SECRET!) |
+| public_key.pem       | server/keys/                 | License validation key        |
+| screenrecorder.db    | server/data/                 | SQLite database               |
+| Uploaded Videos      | server/uploads/{machine_id}/ | Video storage                 |
+| Thumbnails           | server/uploads/thumbnails/   | Video thumbnails              |
 
 ---
 
@@ -360,17 +522,41 @@ Response:
   - timestamp: Server time
   - version: API version
 
-GET /api/v1/get-machine-id
-──────────────────────────
-Purpose: Get machine ID
-Response:
+GET /api/v1/stream/<machine_id>/<filename>
+──────────────────────────────────────────
+Purpose: Stream video with Range support
+Parameters:
   - machine_id: Client machine ID
-
-GET /api/v1/get-public-key
-──────────────────────────
-Purpose: Get public key for client
+  - filename: Video filename
+Headers (optional):
+  - Range: Byte range (e.g., bytes=0-1023)
 Response:
-  - public_key: PEM-formatted key
+  - 200: Full video stream
+  - 206: Partial content stream
+  - 404: Video not found
+
+GET /api/v1/thumbnail/<machine_id>/<filename>
+─────────────────────────────────────────────
+Purpose: Get video thumbnail
+Parameters:
+  - machine_id: Client machine ID
+  - filename: Video filename
+Response:
+  - JPEG image data
+  - 404: Thumbnail not available
+
+GET /api/v1/video-info/<machine_id>/<filename>
+──────────────────────────────────────────────
+Purpose: Get video metadata
+Parameters:
+  - machine_id: Client machine ID
+  - filename: Video filename
+Response:
+  - exists: boolean
+  - size: file size in bytes
+  - duration: video length in seconds
+  - width, height: video dimensions
+  - fps: frames per second
 ```
 
 ---
@@ -414,12 +600,28 @@ Response:
 - **Library**: `mss` (Multi-Screen Shot)
 - **Purpose**: Captures screen frames
 - **Speed**: Very fast, optimized for screen capture
+- **Multi-monitor**: Supports all connected monitors
 
 ### Video Recording
 
 - **Library**: `opencv-python` (cv2)
 - **Purpose**: Video encoding and writing
 - **Format**: MP4 (mp4v codec)
+- **Features**: Frame capture, color conversion
+
+### Audio Recording
+
+- **Library**: `pyaudio` (optional)
+- **Purpose**: Audio capture from microphone
+- **Format**: WAV (16-bit PCM)
+- **Features**: Configurable sample rate, channels
+
+### Video Compression
+
+- **Library**: `ffmpeg` (external) or OpenCV
+- **Purpose**: Video compression for bandwidth savings
+- **Quality**: CRF-based (configurable)
+- **Features**: Automatic quality adjustment
 
 ### License System
 
@@ -438,6 +640,12 @@ Response:
 - **Library**: `SQLAlchemy` with Flask-SQLAlchemy
 - **Purpose**: Data persistence
 - **Features**: ORM, migrations, relationships
+
+### WebSocket
+
+- **Library**: `flask-socketio` (optional)
+- **Purpose**: Real-time communication
+- **Features**: Client status, live updates
 
 ### Hidden Execution
 
@@ -471,6 +679,11 @@ Response:
    ├── Client error (4xx) → Don't retry
    ├── Server error (5xx) → Retry
    └── Network error → Add to queue
+
+5. Monitor Errors
+   ├── Invalid monitor selection → Fall back to primary
+   ├── Capture region out of bounds → Clamp to valid range
+   └── Black frame detection → Try alternate monitors
 ```
 
 ### Server Error Handling
@@ -494,6 +707,11 @@ Response:
    ├── Unexpected error → Return 500
    ├── Log error details
    └── Don't expose internals
+
+5. Video Processing Errors
+   ├── FFmpeg unavailable → Fall back to OpenCV
+   ├── Thumbnail generation failed → Return 404
+   └── Video info unavailable → Return partial data
 ```
 
 ---
@@ -521,7 +739,6 @@ install.bat
 
 # Uninstall service (run as admin)
 uninstall.bat
-
 ```
 
 ---
@@ -543,7 +760,6 @@ tail -f server/logs/app.log
 
 # Client logs (on client PC)
 type %APPDATA%\ScreenRecSvc\service.log
-
 ```
 
 ### Database Queries
@@ -557,12 +773,40 @@ SELECT * FROM videos ORDER BY upload_time DESC LIMIT 10;
 
 -- License status
 SELECT machine_id, expires_at FROM licenses WHERE is_active = 1;
+
+-- Storage usage per client
+SELECT c.machine_id, SUM(v.file_size) as total_bytes
+FROM clients c
+JOIN videos v ON c.id = v.client_id
+GROUP BY c.machine_id;
 ```
 
-</task_progress>
+---
 
-- [x] All improvements implemented
-- [x] Update README.md documentation
-- [x] Update WORKFLOW.md documentation
-      </task_progress>
-      </write_to_file>
+## Configuration Reference
+
+### Client Configuration Options
+
+| Option                 | Type   | Default   | Description                    |
+| ---------------------- | ------ | --------- | ------------------------------ |
+| server_url             | string | localhost | Server URL for uploads         |
+| upload_interval        | int    | 300       | Seconds between uploads        |
+| recording_fps          | int    | 10        | Frames per second              |
+| video_quality          | int    | 80        | Video quality (1-100)          |
+| chunk_duration         | int    | 60        | Seconds per video chunk        |
+| heartbeat_interval     | int    | 60        | Seconds between heartbeats     |
+| max_offline_storage_mb | int    | 1000      | Max offline storage in MB      |
+| retry_base_delay       | float  | 1.0       | Base retry delay (seconds)     |
+| retry_max_delay        | float  | 300.0     | Max retry delay (seconds)      |
+| monitor_selection      | int    | 1         | Monitor to record (1=primary)  |
+| region_x               | int    | 0         | Capture region X offset        |
+| region_y               | int    | 0         | Capture region Y offset        |
+| region_width           | int    | 0         | Capture region width (0=full)  |
+| region_height          | int    | 0         | Capture region height (0=full) |
+| enable_audio           | bool   | false     | Enable audio recording         |
+| audio_sample_rate      | int    | 44100     | Audio sample rate in Hz        |
+| audio_channels         | int    | 2         | Number of audio channels       |
+| enable_compression     | bool   | true      | Enable video compression       |
+| compression_quality    | int    | 23        | FFmpeg CRF value               |
+| generate_thumbnails    | bool   | true      | Generate video thumbnails      |
+| use_websocket          | bool   | false     | Enable WebSocket connection    |

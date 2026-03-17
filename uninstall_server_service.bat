@@ -30,6 +30,15 @@ if exist "%SCRIPT_DIR%nssm.exe" (
     sc delete ScreenRecorderServer
 )
 
+:: Ask about deleting received video files
+echo.
+set /p DELETE_VIDEOS="Delete received video files from clients? (y/n): "
+if /i "%DELETE_VIDEOS%"=="y" (
+    echo Deleting received video files...
+    if exist "%INSTALL_DIR%\uploads" rmdir /s /q "%INSTALL_DIR%\uploads"
+    echo Video files deleted.
+)
+
 :: Ask about removing files
 echo.
 set /p REMOVE_FILES="Remove installation directory and logs? (y/n): "

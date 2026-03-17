@@ -65,7 +65,7 @@ echo Config file written to: %CONFIG_DIR%\config.json
 echo Done.
 pause
 
-echo Step 6: Checking for NSSM...
+echo Step 6: Downloading NSSM...
 if not exist "%SCRIPT_DIR%nssm.exe" (
     echo NSSM not found. Attempting to download...
     curl -L --max-time 30 -o "%SCRIPT_DIR%nssm.zip" https://nssm.cc/release/nssm-2.24.zip
@@ -105,7 +105,7 @@ if not exist "%SCRIPT_DIR%nssm.exe" (
 )
 pause
 
-echo Step 6: Copying license and public key if present...
+echo Step 7: Copying license and public key if present...
 if exist "%SCRIPT_DIR%license.key" (
     copy /Y "%SCRIPT_DIR%license.key" "%INSTALL_DIR%\license.key"
     echo license.key copied to %INSTALL_DIR%.
@@ -122,12 +122,34 @@ if exist "%SCRIPT_DIR%public_key.pem" (
 )
 pause
 
-echo Step 7: Removing any existing service before installing...
+echo Step 8: Removing any existing service before installing...
 "%SCRIPT_DIR%nssm.exe" stop ScreenRecSvc >nul 2>&1
 "%SCRIPT_DIR%nssm.exe" remove ScreenRecSvc confirm >nul 2>&1
 timeout /t 3 /nobreak >nul
 
-echo Step 8: Installing Windows service...
+echo Step 9: Installing Windows service...
+
+:: -----------------------------------------------------------------------
+:: Configure the service to run under the currently logged-in user account
+:: instead of SYSTEM.  Windows services that run as SYSTEM are isolated in
+:: Session 0 and cannot access the interactive desktop / display.
+:: Running as the real user account places the service in the user session
+:: so that mss / screen-capture APIs see the actual screen.
+:: -----------------------------------------------------------------------
+echo.
+echo IMPORTANT: The service must run as YOUR Windows user account (not SYSTEM)
+echo so that it can capture the screen.  Please enter your Windows credentials.
+echo.
+set /p SVC_USER="Enter Windows username (e.g. DOMAIN\Username or .\Username): "
+if "%SVC_USER%"=="" (
+    echo No username entered. Service will run as LocalSystem (screen capture may not work).
+    set SVC_USER=LocalSystem
+    set SVC_PASS=
+) else (
+    set /p SVC_PASS="Enter Windows password for %SVC_USER%: "
+)
+echo.
+
 "%SCRIPT_DIR%nssm.exe" install ScreenRecSvc "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\screen_recorder.py"
 "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppDirectory "%INSTALL_DIR%"
 "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc DisplayName "Screen Recording Service"
@@ -142,10 +164,29 @@ echo Step 8: Installing Windows service...
 :: Do not restart when process exits cleanly (no license = exit 0)
 "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppExit Default Restart
 "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppExit 0 Exit
+
+:: Set the service logon account so it runs in the user's desktop session
+if not "%SVC_USER%"=="LocalSystem" (
+    echo Configuring service to log on as: %SVC_USER%
+    "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc ObjectName "%SVC_USER%" "%SVC_PASS%"
+    if %errorLevel% neq 0 (
+        echo WARNING: Failed to set service logon account. Screen capture may not work.
+        echo You can change it manually via Services.msc ^> ScreenRecSvc ^> Log On tab.
+    ) else (
+        echo Service logon account configured successfully.
+    )
+) else (
+    echo.
+    echo WARNING: Service is configured to run as LocalSystem (Session 0).
+    echo Screen capture will be attempted via automatic user-session detection,
+    echo but for reliable capture it is strongly recommended to run the service
+    echo as the target user account ^(re-run this installer and enter credentials^).
+    echo.
+)
 echo Service installed.
 pause
 
-echo Step 9: Starting service...
+echo Step 10: Starting service...
 "%SCRIPT_DIR%nssm.exe" start ScreenRecSvc
 if %errorLevel% neq 0 (
     echo ERROR: Failed to start service. Error code: %errorLevel%

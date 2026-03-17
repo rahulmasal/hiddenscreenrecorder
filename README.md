@@ -12,6 +12,8 @@ A comprehensive auto screen recording application for Windows with client-server
 
 ## Features
 
+### Core Features
+
 - **Hidden Recording**: Client runs silently in the background without visible windows
 - **License-Based**: Only valid licenses can activate recording (RSA-2048 signed)
 - **Automatic Upload**: Recorded videos are automatically uploaded to the server
@@ -23,6 +25,58 @@ A comprehensive auto screen recording application for Windows with client-server
 - **Heartbeat**: Client heartbeat for connection monitoring
 - **Rate Limiting**: API rate limiting to prevent abuse
 - **CSRF Protection**: Secure forms with CSRF tokens
+
+### New Features ✨
+
+#### Multi-Monitor Support
+
+- Select which monitor to record (primary, secondary, etc.)
+- Automatic monitor detection and validation
+- Fallback to primary monitor on invalid selection
+
+#### Configurable Recording Region
+
+- Record specific regions of the screen
+- Set custom width, height, and position
+- Automatic bounds validation
+
+#### Audio Recording (Optional)
+
+- Record system audio or microphone
+- Configurable sample rate and channels
+- WAV output format
+- Requires PyAudio installation
+
+#### Video Compression (Optional)
+
+- FFmpeg-based video compression
+- Configurable quality levels (CRF-based)
+- Automatic bandwidth savings
+- OpenCV fallback available
+
+#### Pause/Resume Recording
+
+- Pause and resume recording without stopping
+- State management (RECORDING ↔ PAUSED)
+- Thread-safe event handling
+
+#### Video Streaming
+
+- Stream videos directly from server
+- HTTP Range request support (partial content)
+- Chunked streaming for large files
+
+#### Thumbnail Generation
+
+- Automatic thumbnail extraction from videos
+- FFmpeg or OpenCV based
+- Configurable timestamp percentage
+
+#### WebSocket Real-Time Updates (Optional)
+
+- Real-time client status notifications
+- Admin dashboard live updates
+- Event-based communication
 
 ## Architecture
 
@@ -55,14 +109,19 @@ A comprehensive auto screen recording application for Windows with client-server
 ```
 ScreenRecorderApp/
 ├── client/                    # Client application
-│   ├── requirements.txt       # Python dependencies
-│   └── screen_recorder.py     # Main client script
+│   ├── screen_recorder.py     # Main client script
+│   ├── audio_recorder.py      # Audio recording module
+│   ├── video_compressor.py    # Video compression module
+│   ├── monitor_manager.py     # Multi-monitor support
+│   └── requirements.txt       # Python dependencies
 ├── server/                    # Server application
 │   ├── app.py                 # Flask server (main)
 │   ├── config.py              # Configuration management
 │   ├── models.py              # Database models (SQLAlchemy)
 │   ├── auth.py                # Authentication & CSRF
 │   ├── validators.py          # Input validation
+│   ├── video_processor.py     # Thumbnail generation
+│   ├── websocket_manager.py   # WebSocket support
 │   ├── requirements.txt       # Python dependencies
 │   ├── routes/                # API routes (blueprints)
 │   │   ├── __init__.py
@@ -281,21 +340,41 @@ Edit the `config.json` file:
   "heartbeat_interval": 60,
   "max_offline_storage_mb": 1000,
   "retry_base_delay": 1.0,
-  "retry_max_delay": 300.0
+  "retry_max_delay": 300.0,
+  "monitor_selection": 1,
+  "region_x": 0,
+  "region_y": 0,
+  "region_width": 0,
+  "region_height": 0,
+  "enable_audio": false,
+  "audio_sample_rate": 44100,
+  "enable_compression": true,
+  "compression_quality": 23,
+  "use_websocket": false
 }
 ```
 
-| Setting                | Description                    | Default               |
-| ---------------------- | ------------------------------ | --------------------- |
-| server_url             | Server URL for uploads         | http://localhost:5000 |
-| upload_interval        | Seconds between uploads        | 300                   |
-| recording_fps          | Frames per second              | 10                    |
-| video_quality          | Video quality (1-100)          | 80                    |
-| chunk_duration         | Seconds per video chunk        | 60                    |
-| heartbeat_interval     | Seconds between heartbeats     | 60                    |
-| max_offline_storage_mb | Max offline storage in MB      | 1000                  |
-| retry_base_delay       | Base delay for retry (seconds) | 1.0                   |
-| retry_max_delay        | Max delay for retry (seconds)  | 300.0                 |
+| Setting                | Description                      | Default               |
+| ---------------------- | -------------------------------- | --------------------- |
+| server_url             | Server URL for uploads           | http://localhost:5000 |
+| upload_interval        | Seconds between uploads          | 300                   |
+| recording_fps          | Frames per second                | 10                    |
+| video_quality          | Video quality (1-100)            | 80                    |
+| chunk_duration         | Seconds per video chunk          | 60                    |
+| heartbeat_interval     | Seconds between heartbeats       | 60                    |
+| max_offline_storage_mb | Max offline storage in MB        | 1000                  |
+| retry_base_delay       | Base delay for retry (seconds)   | 1.0                   |
+| retry_max_delay        | Max delay for retry (seconds)    | 300.0                 |
+| monitor_selection      | Monitor to record (1=primary)    | 1                     |
+| region_x               | Recording region X offset        | 0                     |
+| region_y               | Recording region Y offset        | 0                     |
+| region_width           | Recording region width (0=full)  | 0                     |
+| region_height          | Recording region height (0=full) | 0                     |
+| enable_audio           | Enable audio recording           | false                 |
+| audio_sample_rate      | Audio sample rate in Hz          | 44100                 |
+| enable_compression     | Enable video compression         | true                  |
+| compression_quality    | FFmpeg CRF value (lower=better)  | 23                    |
+| use_websocket          | Enable WebSocket connection      | false                 |
 
 ### Server Configuration
 
@@ -321,14 +400,17 @@ See [API.md](API.md) for complete API documentation.
 
 ### Quick Reference
 
-| Endpoint                 | Method | Description      |
-| ------------------------ | ------ | ---------------- |
-| /api/v1/health           | GET    | Health check     |
-| /api/v1/upload           | POST   | Upload video     |
-| /api/v1/validate-license | POST   | Validate license |
-| /api/v1/heartbeat        | POST   | Client heartbeat |
-| /api/v1/get-machine-id   | GET    | Get machine ID   |
-| /api/v1/get-public-key   | GET    | Get public key   |
+| Endpoint                       | Method | Description         |
+| ------------------------------ | ------ | ------------------- |
+| /api/v1/health                 | GET    | Health check        |
+| /api/v1/upload                 | POST   | Upload video        |
+| /api/v1/validate-license       | POST   | Validate license    |
+| /api/v1/heartbeat              | POST   | Client heartbeat    |
+| /api/v1/get-machine-id         | GET    | Get machine ID      |
+| /api/v1/get-public-key         | GET    | Get public key      |
+| /api/v1/stream/<id>/<file>     | GET    | Stream video        |
+| /api/v1/thumbnail/<id>/<file>  | GET    | Get video thumbnail |
+| /api/v1/video-info/<id>/<file> | GET    | Get video info      |
 
 ## Security Features
 

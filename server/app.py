@@ -13,10 +13,17 @@ from flask import Flask, render_template, redirect, url_for, flash, session, req
 from flask_cors import CORS
 
 # Add shared module to path
-# Use absolute path to shared directory
-# When running as service, shared directory is in the same directory as app.py
-shared_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared")
-sys.path.insert(0, shared_path)
+# Check multiple locations for the shared module
+_shared_paths = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared"),  # server/shared
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "shared"
+    ),  # ../shared (project root)
+]
+for _shared_path in _shared_paths:
+    if os.path.isdir(_shared_path):
+        sys.path.insert(0, _shared_path)
+        break
 
 # Import local modules
 from config import settings
@@ -49,6 +56,29 @@ init_db(app)
 # Register blueprints
 app.register_blueprint(api_bp)
 app.register_blueprint(legacy_bp)
+
+
+# ============ Security Headers ============
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses"""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
+    # Note: In production with proper SSL, you might want to add:
+    # response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+
+
+# ============ HTTPS Enforcement ============
+if settings.enforce_https:
+    from flask_talisman import Talisman
+
+    talisman = Talisman(app, force_https=True)
+    logger.info("HTTPS enforcement enabled")
 
 
 # ============ Key Management ============
@@ -126,6 +156,213 @@ def create_templates():
     </div>
 </body>
 </html>""",
+        "connection_logs.html": """<!DOCTYPE html>
+<html>
+<head>
+    <title>Connection Logs - Screen Recorder Server</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .badge-upload    { background-color:#198754; }
+        .badge-heartbeat { background-color:#0dcaf0; color:#000; }
+        .badge-validate  { background-color:#ffc107; color:#000; }
+        .badge-error     { background-color:#dc3545; }
+        .badge-other     { background-color:#6c757d; }
+        .log-row:hover   { background-color:#f8f9fa; }
+        .filter-bar      { background:#f1f3f5; border-radius:8px; padding:14px 18px; margin-bottom:18px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
+            <div>
+                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
+                <a href="/admin/generate-license" class="btn btn-success btn-sm me-2">Generate License</a>
+                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
+        </div>
+    </nav>
+    <div class="container mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4 class="mb-0">Connection &amp; Activity Logs</h4>
+            <span class="text-muted small">Showing {{ logs|length }} of {{ total_logs }} entries</span>
+        </div>
+
+        <!-- Summary cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-white bg-primary">
+                    <div class="card-body py-2">
+                        <h6 class="mb-0">Active Clients</h6>
+                        <h3 class="mb-0">{{ active_clients }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-success">
+                    <div class="card-body py-2">
+                        <h6 class="mb-0">Video Uploads (24h)</h6>
+                        <h3 class="mb-0">{{ uploads_24h }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-info" style="color:#000">
+                    <div class="card-body py-2">
+                        <h6 class="mb-0">Heartbeats (24h)</h6>
+                        <h3 class="mb-0">{{ heartbeats_24h }}</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-white bg-danger">
+                    <div class="card-body py-2">
+                        <h6 class="mb-0">Errors (24h)</h6>
+                        <h3 class="mb-0">{{ errors_24h }}</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Client online status -->
+        {% if clients %}
+        <div class="card mb-4">
+            <div class="card-header"><h6 class="mb-0">Client Online Status</h6></div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Machine ID</th>
+                            <th>Status</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for c in clients %}
+                        <tr>
+                            <td><code><a href="/admin/clients/{{ c.machine_id }}">{{ c.machine_id[:16] }}...</a></code></td>
+                            <td>
+                                {% if c.online %}
+                                <span class="badge bg-success">Online</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Offline</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ c.first_seen }}</td>
+                            <td>{{ c.last_seen }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Filter bar -->
+        <form method="GET" action="/admin/logs" class="filter-bar row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label mb-1 small fw-bold">Event Type</label>
+                <select name="action" class="form-select form-select-sm">
+                    <option value="">All events</option>
+                    <option value="video_upload"  {% if filter_action=='video_upload'  %}selected{% endif %}>Video Upload</option>
+                    <option value="heartbeat"     {% if filter_action=='heartbeat'     %}selected{% endif %}>Heartbeat</option>
+                    <option value="license_valid" {% if filter_action=='license_valid' %}selected{% endif %}>License Valid</option>
+                    <option value="license_invalid" {% if filter_action=='license_invalid' %}selected{% endif %}>License Invalid</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label mb-1 small fw-bold">Machine ID (contains)</label>
+                <input type="text" name="machine_id" class="form-control form-control-sm"
+                       value="{{ filter_machine_id }}" placeholder="e.g. abc123">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label mb-1 small fw-bold">Per page</label>
+                <select name="per_page" class="form-select form-select-sm">
+                    {% for n in [25, 50, 100, 200] %}
+                    <option value="{{ n }}" {% if per_page==n %}selected{% endif %}>{{ n }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary btn-sm w-100">Filter</button>
+            </div>
+            <div class="col-md-2">
+                <a href="/admin/logs" class="btn btn-outline-secondary btn-sm w-100">Reset</a>
+            </div>
+        </form>
+
+        <!-- Log table -->
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-sm table-bordered mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th style="width:160px">Timestamp</th>
+                            <th style="width:140px">Event</th>
+                            <th>Machine / Entity</th>
+                            <th>IP Address</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr class="log-row">
+                            <td class="text-nowrap small">{{ log.timestamp }}</td>
+                            <td>
+                                {% if log.action == 'video_upload' %}
+                                    <span class="badge badge-upload">Upload</span>
+                                {% elif log.action == 'heartbeat' %}
+                                    <span class="badge badge-heartbeat">Heartbeat</span>
+                                {% elif 'license' in log.action %}
+                                    <span class="badge badge-validate">{{ log.action }}</span>
+                                {% elif 'error' in log.action %}
+                                    <span class="badge badge-error">Error</span>
+                                {% else %}
+                                    <span class="badge badge-other">{{ log.action }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="small"><code>{{ log.machine_id or (log.entity_type + ' #' + (log.entity_id|string)) }}</code></td>
+                            <td class="small">{{ log.ip_address or '-' }}</td>
+                            <td class="small">
+                                {% if log.details %}
+                                    {% for k, v in log.details.items() %}
+                                        <span class="text-muted">{{ k }}:</span> {{ v }}&nbsp;
+                                    {% endfor %}
+                                {% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted py-4">No log entries found</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <nav class="mt-3">
+            <ul class="pagination pagination-sm justify-content-center">
+                {% for p in range(1, total_pages + 1) %}
+                <li class="page-item {% if p == page %}active{% endif %}">
+                    <a class="page-link"
+                       href="/admin/logs?page={{ p }}&per_page={{ per_page }}&action={{ filter_action }}&machine_id={{ filter_machine_id }}"
+                    >{{ p }}</a>
+                </li>
+                {% endfor %}
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+    <script>
+        // Auto-refresh every 30 seconds
+        setTimeout(() => location.reload(), 30000);
+    </script>
+</body>
+</html>""",
         "dashboard.html": """<!DOCTYPE html>
 <html>
 <head>
@@ -137,6 +374,7 @@ def create_templates():
         <div class="container">
             <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
             <div>
+                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
                 <a href="/admin/generate-license" class="btn btn-success btn-sm me-2">Generate License</a>
                 <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
             </div>
@@ -250,7 +488,10 @@ def create_templates():
     <nav class="navbar navbar-dark bg-dark">
         <div class="container">
             <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+            <div>
+                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
+                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
         </div>
     </nav>
     <div class="container mt-4">
@@ -300,6 +541,10 @@ def create_templates():
     <nav class="navbar navbar-dark bg-dark">
         <div class="container">
             <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
+            <div>
+                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
+                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
         </div>
     </nav>
     <div class="container mt-4">
@@ -343,6 +588,10 @@ def create_templates():
     <nav class="navbar navbar-dark bg-dark">
         <div class="container">
             <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
+            <div>
+                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
+                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
         </div>
     </nav>
     <div class="container mt-4">
@@ -629,6 +878,148 @@ def delete_video(machine_id, filename):
         flash("File not found", "error")
 
     return redirect(url_for("view_client", machine_id=machine_id))
+
+
+@app.route("/admin/logs")
+@require_auth
+def admin_logs():
+    """Connection and activity logs page"""
+    from datetime import timedelta
+
+    # Query params
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 50))
+    filter_action = request.args.get("action", "").strip()
+    filter_machine_id = request.args.get("machine_id", "").strip()
+
+    per_page = max(10, min(per_page, 200))  # clamp
+    offset = (page - 1) * per_page
+
+    now = datetime.utcnow()
+    since_24h = now - timedelta(hours=24)
+
+    # ---- Summary counters ----
+    active_clients = (
+        db.session.execute(
+            db.select(db.func.count(Client.id)).where(Client.is_active == True)
+        ).scalar()
+        or 0
+    )
+
+    uploads_24h = (
+        db.session.execute(
+            db.select(db.func.count(AuditLog.id)).where(
+                AuditLog.action == "video_upload",
+                AuditLog.timestamp >= since_24h,
+            )
+        ).scalar()
+        or 0
+    )
+
+    heartbeats_24h = (
+        db.session.execute(
+            db.select(db.func.count(AuditLog.id)).where(
+                AuditLog.action == "heartbeat",
+                AuditLog.timestamp >= since_24h,
+            )
+        ).scalar()
+        or 0
+    )
+
+    errors_24h = (
+        db.session.execute(
+            db.select(db.func.count(AuditLog.id)).where(
+                AuditLog.action.like("%error%"),
+                AuditLog.timestamp >= since_24h,
+            )
+        ).scalar()
+        or 0
+    )
+
+    # ---- Client online status (last heartbeat within 2 minutes = online) ----
+    clients_raw = (
+        db.session.execute(db.select(Client).order_by(Client.last_seen.desc()))
+        .scalars()
+        .all()
+    )
+    clients_status = [
+        {
+            "machine_id": c.machine_id,
+            "online": c.last_seen is not None
+            and (now - c.last_seen).total_seconds() < 120,
+            "first_seen": (
+                c.first_seen.strftime("%Y-%m-%d %H:%M:%S") if c.first_seen else "N/A"
+            ),
+            "last_seen": (
+                c.last_seen.strftime("%Y-%m-%d %H:%M:%S") if c.last_seen else "N/A"
+            ),
+        }
+        for c in clients_raw
+    ]
+
+    # ---- Build log query with optional filters ----
+    log_query = db.select(AuditLog).order_by(AuditLog.timestamp.desc())
+    if filter_action:
+        log_query = log_query.where(AuditLog.action == filter_action)
+
+    total_logs = (
+        db.session.execute(
+            db.select(db.func.count()).select_from(log_query.subquery())
+        ).scalar()
+        or 0
+    )
+
+    logs_raw = (
+        db.session.execute(log_query.limit(per_page).offset(offset)).scalars().all()
+    )
+
+    # Resolve machine_id for each log via entity_id (video upload links to Video->Client)
+    log_data = []
+    for log in logs_raw:
+        machine_id_label = None
+        if log.action == "video_upload" and log.entity_id:
+            video = db.session.get(Video, log.entity_id)
+            if video and video.client:
+                machine_id_label = video.client.machine_id[:16] + "..."
+        log_data.append(
+            {
+                "timestamp": (
+                    log.timestamp.strftime("%Y-%m-%d %H:%M:%S") if log.timestamp else ""
+                ),
+                "action": log.action,
+                "entity_type": log.entity_type,
+                "entity_id": log.entity_id,
+                "machine_id": machine_id_label,
+                "ip_address": log.ip_address,
+                "details": log.details or {},
+            }
+        )
+
+    # Filter by machine_id label after resolution (simple substring match)
+    if filter_machine_id:
+        log_data = [
+            l
+            for l in log_data
+            if l["machine_id"] and filter_machine_id.lower() in l["machine_id"].lower()
+        ]
+
+    total_pages = max(1, (total_logs + per_page - 1) // per_page)
+
+    return render_template(
+        "connection_logs.html",
+        logs=log_data,
+        total_logs=total_logs,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        filter_action=filter_action,
+        filter_machine_id=filter_machine_id,
+        active_clients=active_clients,
+        uploads_24h=uploads_24h,
+        heartbeats_24h=heartbeats_24h,
+        errors_24h=errors_24h,
+        clients=clients_status,
+    )
 
 
 # ============ Main ============

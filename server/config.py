@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     ssl_enabled: bool = False
     ssl_cert: Optional[str] = None
     ssl_key: Optional[str] = None
+    enforce_https: bool = Field(
+        default=False, description="Enforce HTTPS redirects in production"
+    )
 
     @field_validator("admin_password")
     @classmethod

@@ -344,6 +344,14 @@ def heartbeat():
 
         db.session.commit()
 
+        # Log heartbeat so it appears on the connection logs page
+        log_audit(
+            action="heartbeat",
+            entity_type="client",
+            entity_id=client.id,
+            details={"machine_id": machine_id},
+        )
+
         return jsonify(
             {
                 "success": True,
@@ -398,6 +406,195 @@ def health_check():
             "version": "1.0.0",
         }
     )
+
+
+# ============ Video Streaming Routes ============
+
+
+@api_bp.route("/stream/<machine_id>/<filename>", methods=["GET"])
+def stream_video(machine_id: str, filename: str):
+    """Stream video file with range support for partial content"""
+    from flask import Response, make_response
+
+    try:
+        # Validate inputs
+        is_valid, error = InputValidator.validate_filename(filename)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        is_valid, error = InputValidator.validate_machine_id(machine_id)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        # Get video file path
+        video_path = settings.upload_folder / machine_id / filename
+
+        if not video_path.exists():
+            return jsonify({"error": "Video not found"}), 404
+
+        # Get file size
+        file_size = video_path.stat().st_size
+
+        # Parse range header for partial content
+        range_header = request.headers.get("Range", None)
+
+        if range_header:
+            # Parse range (e.g., "bytes=0-1023")
+            try:
+                range_match = range_header.replace("bytes=", "").split("-")
+                start = int(range_match[0]) if range_match[0] else 0
+                end = int(range_match[1]) if range_match[1] else file_size - 1
+
+                # Clamp values
+                start = max(0, start)
+                end = min(file_size - 1, end)
+
+                length = end - start + 1
+
+                def generate():
+                    with open(video_path, "rb") as f:
+                        f.seek(start)
+                        remaining = length
+                        chunk_size = 64 * 1024  # 64KB chunks
+                        while remaining > 0:
+                            read_size = min(chunk_size, remaining)
+                            data = f.read(read_size)
+                            if not data:
+                                break
+                            remaining -= len(data)
+                            yield data
+
+                response = Response(
+                    generate(),
+                    206,
+                    mimetype="video/mp4",
+                    direct_passthrough=True,
+                )
+                response.headers.add(
+                    "Content-Range", f"bytes {start}-{end}/{file_size}"
+                )
+                response.headers.add("Accept-Ranges", "bytes")
+                response.headers.add("Content-Length", str(length))
+                return response
+
+            except (ValueError, IndexError):
+                # Invalid range header, return full file
+                pass
+
+        # No range header or invalid range, return full file
+        def generate_full():
+            with open(video_path, "rb") as f:
+                chunk_size = 64 * 1024  # 64KB chunks
+                while True:
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    yield data
+
+        response = Response(
+            generate_full(),
+            200,
+            mimetype="video/mp4",
+            direct_passthrough=True,
+        )
+        response.headers.add("Accept-Ranges", "bytes")
+        response.headers.add("Content-Length", str(file_size))
+        return response
+
+    except Exception as e:
+        logger.error(f"Video streaming error: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@api_bp.route("/thumbnail/<machine_id>/<filename>", methods=["GET"])
+def get_thumbnail(machine_id: str, filename: str):
+    """Get or generate thumbnail for a video"""
+    from flask import send_file
+
+    try:
+        # Validate inputs
+        is_valid, error = InputValidator.validate_filename(filename)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        is_valid, error = InputValidator.validate_machine_id(machine_id)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        # Check if video exists
+        video_path = settings.upload_folder / machine_id / filename
+        if not video_path.exists():
+            return jsonify({"error": "Video not found"}), 404
+
+        # Check for existing thumbnail
+        thumbnail_path = (
+            settings.upload_folder / "thumbnails" / f"{video_path.stem}_thumb.jpg"
+        )
+
+        if thumbnail_path.exists():
+            return send_file(thumbnail_path, mimetype="image/jpeg")
+
+        # Generate thumbnail
+        try:
+            from video_processor import VideoProcessor
+
+            processor = VideoProcessor(settings.upload_folder / "thumbnails")
+            result = processor.generate_thumbnail(video_path)
+
+            if result and result.exists():
+                return send_file(result, mimetype="image/jpeg")
+        except ImportError:
+            pass
+
+        # Return placeholder or 404
+        return jsonify({"error": "Thumbnail not available"}), 404
+
+    except Exception as e:
+        logger.error(f"Thumbnail error: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@api_bp.route("/video-info/<machine_id>/<filename>", methods=["GET"])
+def get_video_info(machine_id: str, filename: str):
+    """Get video information including duration, resolution, etc."""
+    try:
+        # Validate inputs
+        is_valid, error = InputValidator.validate_filename(filename)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        is_valid, error = InputValidator.validate_machine_id(machine_id)
+        if not is_valid:
+            return jsonify({"error": error}), 400
+
+        # Get video file path
+        video_path = settings.upload_folder / machine_id / filename
+        if not video_path.exists():
+            return jsonify({"error": "Video not found"}), 404
+
+        # Get video info
+        try:
+            from video_processor import VideoProcessor
+
+            processor = VideoProcessor(settings.upload_folder / "thumbnails")
+            info = processor.get_video_info(video_path)
+            return jsonify(info)
+        except ImportError:
+            # Fallback to basic info
+            return jsonify(
+                {
+                    "exists": True,
+                    "size": video_path.stat().st_size,
+                    "duration": None,
+                    "width": None,
+                    "height": None,
+                    "fps": None,
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Video info error: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 # ============ Legacy API Routes (for backward compatibility) ============
