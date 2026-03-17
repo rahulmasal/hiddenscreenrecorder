@@ -346,6 +346,8 @@ def heartbeat():
 
         if client is None:
             client = Client(machine_id=machine_id)
+            client.last_seen = datetime.utcnow()
+            client.is_active = True
             db.session.add(client)
         else:
             client.last_seen = datetime.utcnow()

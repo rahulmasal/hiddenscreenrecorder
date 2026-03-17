@@ -1094,6 +1094,35 @@ class ScreenRecorder:
                                                 f"[RECORD] Switching to monitor {test_monitor_idx} for capture"
                                             )
                                             monitor_to_use = test_monitor_idx
+                                            # Update capture region to use the new monitor
+                                            capture_region = self._get_monitor_region(
+                                                sct, monitor_to_use
+                                            )
+                                            width = capture_region["width"]
+                                            height = capture_region["height"]
+                                            logger.info(
+                                                f"[RECORD] Updated capture region to monitor {monitor_to_use}: "
+                                                f"{width}x{height} at ({capture_region['left']}, {capture_region['top']})"
+                                            )
+                                            # Need to recreate video writer with new dimensions
+                                            if self.video_writer is not None:
+                                                self.video_writer.release()
+                                            video_path = self._get_video_path()
+                                            self.video_writer = cv2.VideoWriter(
+                                                str(video_path),
+                                                fourcc,
+                                                fps,
+                                                (width, height),
+                                            )
+                                            if not self.video_writer.isOpened():
+                                                logger.error(
+                                                    f"[RECORD] Failed to open video writer for {video_path}"
+                                                )
+                                                return
+                                            logger.info(
+                                                f"[RECORD] Restarted video writer for new monitor: {video_path.name}"
+                                            )
+                                            break  # Stop testing other monitors once we find a good one
                                 except Exception as monitor_err:
                                     logger.debug(
                                         f"[RECORD] Error testing monitor {test_monitor_idx}: {monitor_err}"
