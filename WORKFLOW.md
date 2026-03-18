@@ -725,12 +725,6 @@ start_server.bat
 # Get machine ID
 python get_machine_id.py
 
-# Test system
-python test_system.py
-
-# Run unit tests
-python -m pytest tests/test_server.py -v
-
 # Build client executable
 python build_client.py
 

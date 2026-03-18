@@ -177,7 +177,7 @@ Videos are stored in: `C:\Program Files\ScreenRecorderServer\uploads\{machine-id
 
 ### Problem: Client not showing in dashboard
 
-**Solution:** Check client logs: `type "%APPDATA%\ScreenRecSvc\service.log"`
+**Solution:** Check client logs: `type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"`
 
 ---
 
@@ -212,7 +212,7 @@ sc stop ScreenRecSvc
 sc query ScreenRecSvc
 
 # View logs
-type "%APPDATA%\ScreenRecSvc\service.log"
+type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"
 ```
 
 ---

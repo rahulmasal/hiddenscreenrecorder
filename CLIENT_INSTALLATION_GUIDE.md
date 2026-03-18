@@ -90,8 +90,20 @@ Before starting, make sure you have:
 
 2. **Check the logs:**
 
+   There are multiple log files to check:
+
    ```batch
+   :: Main client log (most detailed)
+   type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"
+
+   :: Crash log (if the client crashes unexpectedly)
+   type "C:\ScreenRecorderClient\ScreenRecSvc\crash.log"
+
+   :: Service stdout (captured by NSSM)
    type "C:\ScreenRecorderClient\logs\service.log"
+
+   :: Service stderr (errors captured by NSSM)
+   type "C:\ScreenRecorderClient\logs\service_error.log"
    ```
 
    - You should see messages like "License validated successfully" and "Recording started"
@@ -179,9 +191,40 @@ Before starting, make sure you have:
 
 **Solution:**
 
-- Check the logs: `type "C:\ScreenRecorderClient\logs\service.log"`
+- Check the logs:
+  ```batch
+  type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"
+  type "C:\ScreenRecorderClient\ScreenRecSvc\crash.log"
+  type "C:\ScreenRecorderClient\logs\service.log"
+  ```
 - Make sure Python is installed
 - Try running the client manually: `python screen_recorder.py`
+
+### Problem: Client crashes or no logs visible
+
+**Solution:**
+
+- Check ALL log files in order (crash log first for uncaught exceptions):
+
+  ```batch
+  :: 1. Crash log (uncaught exceptions - check this FIRST if client crashes immediately)
+  type "C:\ScreenRecorderClient\ScreenRecSvc\crash.log"
+
+  :: 2. Client log (detailed runtime logging)
+  type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"
+
+  :: 3. Service stdout (captured by NSSM)
+  type "C:\ScreenRecorderClient\logs\service.log"
+
+  :: 4. Service stderr (errors captured by NSSM)
+  type "C:\ScreenRecorderClient\logs\service_error.log"
+  ```
+
+- Common causes:
+  - Missing dependencies: Run `pip install -r requirements.txt` in the installation directory
+  - Permission issues: The installer now grants write access to all users for logs/, ScreenRecSvc/, recordings/, and offline_queue/ directories
+  - License issues: Verify `license.key` and `public_key.pem` exist in `C:\ScreenRecorderClient\`
+  - Service account: Ensure the service is configured to log on as a user account (not LocalSystem) for screen capture to work
 
 ### Problem: Videos not uploading
 
@@ -236,7 +279,7 @@ uninstall_client_service.bat
 1. **Automatic Recording:**
    - The client starts recording immediately
    - Records screen in chunks (default: 1 minute each)
-   - Saves videos to `C:\ScreenRecorderClient\recordings\`
+   - Saves videos to `C:\ScreenRecorderClient\ScreenRecSvc\recordings\`
 
 2. **Automatic Upload:**
    - Videos are uploaded to the server every 5 minutes

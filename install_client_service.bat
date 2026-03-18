@@ -1,4 +1,16 @@
 @echo off
+
+:: ---------------------------------------------------------------
+:: Re-launch inside a persistent cmd window so the console does
+:: NOT close automatically when the script finishes or errors out.
+:: The _KEEP_OPEN flag prevents infinite re-launch loops.
+:: ---------------------------------------------------------------
+if not defined _KEEP_OPEN (
+    set _KEEP_OPEN=1
+    cmd /k ""%~f0""
+    exit /b
+)
+
 echo ================================================
 echo   Screen Recorder Client - Windows Service Installer
 echo ================================================
@@ -18,6 +30,7 @@ set INSTALL_DIR=C:\ScreenRecorderClient
 set SCRIPT_DIR=%~dp0
 set CLIENT_DIR=%SCRIPT_DIR%client
 set SHARED_DIR=%SCRIPT_DIR%shared
+set NSSM=%SCRIPT_DIR%nssm.exe
 
 echo Step 1: Creating installation directory...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
@@ -66,7 +79,7 @@ echo Done.
 pause
 
 echo Step 6: Downloading NSSM...
-if not exist "%SCRIPT_DIR%nssm.exe" (
+if not exist "%NSSM%" (
     echo NSSM not found. Attempting to download...
     curl -L --max-time 30 -o "%SCRIPT_DIR%nssm.zip" https://nssm.cc/release/nssm-2.24.zip
     if not exist "%SCRIPT_DIR%nssm.zip" (
@@ -103,6 +116,11 @@ if not exist "%SCRIPT_DIR%nssm.exe" (
 ) else (
     echo NSSM already exists, skipping download.
 )
+
+echo Copying nssm.exe to installation directory...
+copy /Y "%SCRIPT_DIR%nssm.exe" "%INSTALL_DIR%\nssm.exe"
+set NSSM=%INSTALL_DIR%\nssm.exe
+echo NSSM will run from: %NSSM%
 pause
 
 echo Step 7: Copying license and public key if present...
@@ -123,11 +141,36 @@ if exist "%SCRIPT_DIR%public_key.pem" (
 pause
 
 echo Step 8: Removing any existing service before installing...
-"%SCRIPT_DIR%nssm.exe" stop ScreenRecSvc >nul 2>&1
-"%SCRIPT_DIR%nssm.exe" remove ScreenRecSvc confirm >nul 2>&1
+echo Stopping existing service (errors are normal if service does not exist)...
+"%NSSM%" stop ScreenRecSvc
+timeout /t 2 /nobreak >nul
+echo Removing existing service (errors are normal if service does not exist)...
+"%NSSM%" remove ScreenRecSvc confirm
 timeout /t 3 /nobreak >nul
 
+echo Ensuring logs directory exists and granting write permissions to all users...
+if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
+icacls "%INSTALL_DIR%\logs" /grant "Users:(OI)(CI)F" /T >nul 2>&1
+if not exist "%INSTALL_DIR%\ScreenRecSvc" mkdir "%INSTALL_DIR%\ScreenRecSvc"
+icacls "%INSTALL_DIR%\ScreenRecSvc" /grant "Users:(OI)(CI)F" /T >nul 2>&1
+if not exist "%INSTALL_DIR%\ScreenRecSvc\recordings" mkdir "%INSTALL_DIR%\ScreenRecSvc\recordings"
+icacls "%INSTALL_DIR%\ScreenRecSvc\recordings" /grant "Users:(OI)(CI)F" /T >nul 2>&1
+if not exist "%INSTALL_DIR%\ScreenRecSvc\offline_queue" mkdir "%INSTALL_DIR%\ScreenRecSvc\offline_queue"
+icacls "%INSTALL_DIR%\ScreenRecSvc\offline_queue" /grant "Users:(OI)(CI)F" /T >nul 2>&1
+
+echo Creating empty log files if they don't exist...
+if not exist "%INSTALL_DIR%\ScreenRecSvc\client.log" type nul > "%INSTALL_DIR%\ScreenRecSvc\client.log"
+if not exist "%INSTALL_DIR%\ScreenRecSvc\crash.log" type nul > "%INSTALL_DIR%\ScreenRecSvc\crash.log"
+icacls "%INSTALL_DIR%\ScreenRecSvc\client.log" /grant "Users:(OI)(CI)F" >nul 2>&1
+icacls "%INSTALL_DIR%\ScreenRecSvc\crash.log" /grant "Users:(OI)(CI)F" >nul 2>&1
+echo Step 8 complete.
+pause
+
 echo Step 9: Installing Windows service...
+echo NSSM path used: %NSSM%
+echo Python path:   %INSTALL_DIR%\venv\Scripts\python.exe
+echo Script path:   %INSTALL_DIR%\screen_recorder.py
+echo.
 
 :: -----------------------------------------------------------------------
 :: Configure the service to run under the currently logged-in user account
@@ -140,54 +183,96 @@ echo.
 echo IMPORTANT: The service must run as YOUR Windows user account (not SYSTEM)
 echo so that it can capture the screen.  Please enter your Windows credentials.
 echo.
-set /p SVC_USER="Enter Windows username (e.g. DOMAIN\Username or .\Username): "
-if "%SVC_USER%"=="" (
-    echo No username entered. Service will run as LocalSystem (screen capture may not work).
-    set SVC_USER=LocalSystem
-    set SVC_PASS=
-) else (
-    set /p SVC_PASS="Enter Windows password for %SVC_USER%: "
-)
+echo Username format examples:
+echo   .\RAHUL          (local account, dot-backslash prefix)
+echo   Wings\RAHUL      (local account with computer name)
+echo   DOMAIN\RAHUL     (domain account)
 echo.
 
-"%SCRIPT_DIR%nssm.exe" install ScreenRecSvc "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\screen_recorder.py"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppDirectory "%INSTALL_DIR%"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc DisplayName "Screen Recording Service"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc Description "Automatic screen recording service"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc Start SERVICE_AUTO_START
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppStdout "%INSTALL_DIR%\logs\service.log"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppStderr "%INSTALL_DIR%\logs\service_error.log"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppRotateFiles 1
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppRotateOnline 1
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppRotateSeconds 86400
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppRotateBytes 1048576
-:: Do not restart when process exits cleanly (no license = exit 0)
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppExit Default Restart
-"%SCRIPT_DIR%nssm.exe" set ScreenRecSvc AppExit 0 Exit
+:: Get username - use simple set /p without delayed expansion
+set SVC_USER=
+set /p SVC_USER="Enter Windows username (e.g. .\RAHUL or Wings\RAHUL): "
+echo.
+
+:: Check if username is empty and branch accordingly
+if "%SVC_USER%"=="" goto :use_localsystem
+goto :ask_password
+
+:use_localsystem
+echo No username entered. Service will run as LocalSystem (screen capture may not work).
+set SVC_USER=LocalSystem
+set SVC_PASS=
+goto :install_service
+
+:ask_password
+echo Username: %SVC_USER%
+echo.
+echo If your account has NO password, just press Enter when asked for password.
+set SVC_PASS=
+set /p SVC_PASS="Enter Windows password for %SVC_USER% (press Enter if no password): "
+echo.
+pause
+goto :install_service
+
+:install_service
+echo.
+pause
+
+echo Installing NSSM service...
+"%NSSM%" install ScreenRecSvc "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\screen_recorder.py"
+if errorlevel 1 (
+    echo ERROR: NSSM install failed.
+    echo Make sure nssm.exe is present at: %NSSM%
+    echo Make sure you are running this script as Administrator.
+    pause
+    exit /b 1
+)
+echo NSSM service registered OK.
+
+echo Configuring service settings...
+"%NSSM%" set ScreenRecSvc AppDirectory "%INSTALL_DIR%"
+"%NSSM%" set ScreenRecSvc DisplayName "Screen Recording Service"
+"%NSSM%" set ScreenRecSvc Description "Automatic screen recording service"
+"%NSSM%" set ScreenRecSvc Start SERVICE_AUTO_START
+"%NSSM%" set ScreenRecSvc AppStdout "%INSTALL_DIR%\logs\service.log"
+"%NSSM%" set ScreenRecSvc AppStderr "%INSTALL_DIR%\logs\service_error.log"
+"%NSSM%" set ScreenRecSvc AppRotateFiles 1
+"%NSSM%" set ScreenRecSvc AppRotateOnline 1
+"%NSSM%" set ScreenRecSvc AppRotateSeconds 86400
+"%NSSM%" set ScreenRecSvc AppRotateBytes 1048576
+"%NSSM%" set ScreenRecSvc AppExit Default Restart
+"%NSSM%" set ScreenRecSvc AppExit 0 Exit
+echo Service settings applied.
 
 :: Set the service logon account so it runs in the user's desktop session
-if not "%SVC_USER%"=="LocalSystem" (
+:: Use a separate flag to avoid backslash/dot in SVC_USER breaking the IF comparison
+if "%SVC_USER%"=="LocalSystem" goto :skip_logon_config
     echo Configuring service to log on as: %SVC_USER%
-    "%SCRIPT_DIR%nssm.exe" set ScreenRecSvc ObjectName "%SVC_USER%" "%SVC_PASS%"
-    if %errorLevel% neq 0 (
-        echo WARNING: Failed to set service logon account. Screen capture may not work.
-        echo You can change it manually via Services.msc ^> ScreenRecSvc ^> Log On tab.
+    "%NSSM%" set ScreenRecSvc ObjectName "%SVC_USER%" "%SVC_PASS%"
+    if errorlevel 1 (
+        echo WARNING: Failed to set service logon account.
+        echo Common causes:
+        echo   - Wrong username format. Use .\YourUsername or DOMAIN\YourUsername
+        echo   - Wrong password
+        echo   - Account lacks "Log on as a service" right
+        echo Fix manually: Services.msc ^> ScreenRecSvc ^> Properties ^> Log On tab
     ) else (
         echo Service logon account configured successfully.
     )
-) else (
+    goto :logon_config_done
+:skip_logon_config
     echo.
     echo WARNING: Service is configured to run as LocalSystem (Session 0).
     echo Screen capture will be attempted via automatic user-session detection,
     echo but for reliable capture it is strongly recommended to run the service
     echo as the target user account ^(re-run this installer and enter credentials^).
     echo.
-)
-echo Service installed.
+:logon_config_done
+echo Step 9 complete - Service installed.
 pause
 
 echo Step 10: Starting service...
-"%SCRIPT_DIR%nssm.exe" start ScreenRecSvc
+"%NSSM%" start ScreenRecSvc
 if %errorLevel% neq 0 (
     echo ERROR: Failed to start service. Error code: %errorLevel%
     echo Check the service logs at: %INSTALL_DIR%\logs\
@@ -204,7 +289,12 @@ echo ================================================
 echo.
 echo Service Name: ScreenRecSvc
 echo Installation Directory: %INSTALL_DIR%
-echo Logs Directory: %INSTALL_DIR%\logs
+echo.
+echo Log Files:
+echo   - Service stdout: %INSTALL_DIR%\logs\service.log
+echo   - Service stderr: %INSTALL_DIR%\logs\service_error.log
+echo   - Client log:     %INSTALL_DIR%\ScreenRecSvc\client.log
+echo   - Crash log:      %INSTALL_DIR%\ScreenRecSvc\crash.log
 echo.
 echo The client will start automatically on system boot.
 echo.
@@ -212,6 +302,10 @@ echo To manage the service:
 echo   - Start:   sc start ScreenRecSvc
 echo   - Stop:    sc stop ScreenRecSvc
 echo   - Status:  sc query ScreenRecSvc
+echo.
+echo To view logs:
+echo   - type "%INSTALL_DIR%\ScreenRecSvc\client.log"
+echo   - type "%INSTALL_DIR%\ScreenRecSvc\crash.log"
 echo.
 echo To uninstall, run: uninstall_client_service.bat
 echo ================================================

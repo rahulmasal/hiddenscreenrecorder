@@ -11,7 +11,69 @@ import tempfile
 import logging
 from pathlib import Path
 
-# Add shared module to path - check same dir first (deployed), then parent (dev)
+# ============================================================================
+# EARLY CRASH LOGGING - Capture any crashes before full logging setup
+# This must happen BEFORE any other imports that might fail
+# ============================================================================
+
+
+def _get_log_dir():
+    """Determine the best log directory, checking multiple locations."""
+    # Priority 1: Installed location (C:\ScreenRecorderClient\ScreenRecSvc)
+    installed_log_dir = Path("C:\\ScreenRecorderClient\\ScreenRecSvc")
+    if installed_log_dir.exists():
+        return installed_log_dir
+
+    # Priority 2: Same directory as this script
+    script_dir = Path(__file__).parent.resolve()
+    script_log_dir = script_dir / "ScreenRecSvc"
+    try:
+        script_log_dir.mkdir(parents=True, exist_ok=True)
+        return script_log_dir
+    except (OSError, PermissionError):
+        pass
+
+    # Priority 3: User's temp directory as fallback
+    temp_log_dir = Path(tempfile.gettempdir()) / "ScreenRecSvc"
+    try:
+        temp_log_dir.mkdir(parents=True, exist_ok=True)
+        return temp_log_dir
+    except (OSError, PermissionError):
+        # Last resort: current directory
+        return Path.cwd() / "ScreenRecSvc"
+
+
+# Write early crash log immediately
+_EARLY_LOG_DIR = _get_log_dir()
+_EARLY_LOG_FILE = _EARLY_LOG_DIR / "client.log"
+_EARLY_CRASH_FILE = _EARLY_LOG_DIR / "crash.log"
+
+
+def _write_early_crash(exc_type, exc_value, exc_tb):
+    """Write uncaught exceptions to crash log before Python exits."""
+    import traceback
+
+    try:
+        with open(_EARLY_CRASH_FILE, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"UNCAUGHT EXCEPTION at {__import__('datetime').datetime.now()}\n")
+            f.write(f"Process: {sys.executable}\n")
+            f.write(f"Script: {__file__}\n")
+            f.write(f"CWD: {os.getcwd()}\n")
+            f.write(f"Log Dir: {_EARLY_LOG_DIR}\n")
+            f.write(f"{'='*60}\n")
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+            f.flush()
+    except Exception:
+        pass  # Can't do anything if this fails
+
+
+# Install early crash handler
+sys.excepthook = _write_early_crash
+
+# ============================================================================
+# PATH SETUP FOR SHARED MODULE
+# ============================================================================
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _shared_same_level = os.path.join(_script_dir, "shared")
 _shared_parent_level = os.path.join(_script_dir, "..", "shared")
@@ -20,18 +82,42 @@ if os.path.isdir(_shared_same_level):
 else:
     sys.path.insert(0, _shared_parent_level)
 
-# Configure logging - stdout only, NSSM captures it to service.log
-# (same pattern as server/app.py - logging.basicConfig with no file handler)
-# Store all data in the same directory as the executable/script for portability
-LOG_DIR = Path(__file__).parent / "ScreenRecSvc"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+# ============================================================================
+# FULL LOGGING SETUP
+# ============================================================================
+LOG_DIR = _EARLY_LOG_DIR
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+_LOG_FILE = LOG_DIR / "client.log"
+_log_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+# Root logger - configure manually so we can add multiple handlers
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+
+# Stdout handler (NSSM will redirect this to service.log)
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(_log_formatter)
+_root_logger.addHandler(_stdout_handler)
+
+# Direct file handler - independent of NSSM, always written by the process itself
+try:
+    _file_handler = logging.FileHandler(str(_LOG_FILE), encoding="utf-8")
+    _file_handler.setFormatter(_log_formatter)
+    _root_logger.addHandler(_file_handler)
+except OSError as _fh_err:
+    sys.stdout.write(f"WARNING: Could not open log file {_LOG_FILE}: {_fh_err}\n")
+    sys.stdout.flush()
+
 logger = logging.getLogger(__name__)
+logger.info("=" * 60)
 logger.info("screen_recorder.py starting up...")
+logger.info(f"Log file: {_LOG_FILE}")
+logger.info(f"Crash log: {_EARLY_CRASH_FILE}")
+logger.info(f"Python executable: {sys.executable}")
+logger.info(f"Working directory: {os.getcwd()}")
+logger.info(f"Script location: {__file__}")
+logger.info(f"Log directory: {LOG_DIR}")
+logger.info("=" * 60)
 
 try:
     import cv2

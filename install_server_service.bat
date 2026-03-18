@@ -25,6 +25,20 @@ if not exist "%INSTALL_DIR%\logs" mkdir "%INSTALL_DIR%\logs"
 echo Done.
 pause
 
+echo Step 1b: Copying nssm.exe to installation directory...
+if exist "%NSSM%" (
+    copy /Y "%NSSM%" "%INSTALL_DIR%\nssm.exe"
+    echo nssm.exe copied to %INSTALL_DIR%
+) else (
+    echo ERROR: nssm.exe not found at %SCRIPT_DIR%nssm.exe
+    echo Please place nssm.exe in the same folder as this installer and re-run.
+    pause
+    exit /b 1
+)
+set NSSM=%INSTALL_DIR%\nssm.exe
+echo NSSM will run from: %NSSM%
+pause
+
 echo Step 2: Copying server files...
 xcopy /E /I /Y "%SERVER_DIR%\*" "%INSTALL_DIR%\"
 echo Step 2b: Copying shared files...
@@ -58,7 +72,7 @@ if not exist "%INSTALL_DIR%\.env" (
 pause
 
 echo Step 6: Downloading NSSM...
-if not exist "%SCRIPT_DIR%nssm.exe" (
+if not exist "%NSSM%" (
     echo Downloading NSSM from https://nssm.cc/release/nssm-2.24.zip...
     curl -L -o "%SCRIPT_DIR%nssm.zip" https://nssm.cc/release/nssm-2.24.zip
     if not exist "%SCRIPT_DIR%nssm.zip" (
@@ -88,7 +102,7 @@ if not exist "%SCRIPT_DIR%nssm.exe" (
         pause
         exit /b 1
     )
-    copy "%SCRIPT_DIR%nssm-2.24\win64\nssm.exe" "%SCRIPT_DIR%nssm.exe"
+    copy "%SCRIPT_DIR%nssm-2.24\win64\nssm.exe" "%NSSM%"
     rmdir /s /q "%SCRIPT_DIR%nssm-2.24"
     del "%SCRIPT_DIR%nssm.zip"
     echo NSSM downloaded successfully.
@@ -98,22 +112,22 @@ if not exist "%SCRIPT_DIR%nssm.exe" (
 pause
 
 echo Step 7: Installing Windows service...
-"%SCRIPT_DIR%nssm.exe" install ScreenRecorderServer "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\app.py"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppDirectory "%INSTALL_DIR%"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer DisplayName "Screen Recorder Server"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer Description "Screen Recorder Server Application"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer Start SERVICE_AUTO_START
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppStdout "%INSTALL_DIR%\logs\service.log"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppStderr "%INSTALL_DIR%\logs\service_error.log"
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateFiles 1
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateOnline 1
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateSeconds 86400
-"%SCRIPT_DIR%nssm.exe" set ScreenRecorderServer AppRotateBytes 1048576
+"%NSSM%" install ScreenRecorderServer "%INSTALL_DIR%\venv\Scripts\python.exe" "%INSTALL_DIR%\app.py"
+"%NSSM%" set ScreenRecorderServer AppDirectory "%INSTALL_DIR%"
+"%NSSM%" set ScreenRecorderServer DisplayName "Screen Recorder Server"
+"%NSSM%" set ScreenRecorderServer Description "Screen Recorder Server Application"
+"%NSSM%" set ScreenRecorderServer Start SERVICE_AUTO_START
+"%NSSM%" set ScreenRecorderServer AppStdout "%INSTALL_DIR%\logs\service.log"
+"%NSSM%" set ScreenRecorderServer AppStderr "%INSTALL_DIR%\logs\service_error.log"
+"%NSSM%" set ScreenRecorderServer AppRotateFiles 1
+"%NSSM%" set ScreenRecorderServer AppRotateOnline 1
+"%NSSM%" set ScreenRecorderServer AppRotateSeconds 86400
+"%NSSM%" set ScreenRecorderServer AppRotateBytes 1048576
 echo Service installed.
 pause
 
 echo Step 8: Starting service...
-"%SCRIPT_DIR%nssm.exe" start ScreenRecorderServer
+"%NSSM%" start ScreenRecorderServer
 if %errorLevel% neq 0 (
     echo ERROR: Failed to start service. Error code: %errorLevel%
     echo Check the service logs at: %INSTALL_DIR%\logs\

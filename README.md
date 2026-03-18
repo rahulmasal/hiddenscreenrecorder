@@ -128,11 +128,9 @@ ScreenRecorderApp/
 │   │   └── api.py             # API v1 endpoints
 │   └── templates/             # HTML templates
 ├── shared/                    # Shared modules
-│   ├── __init__.py
+│   ├���─ __init__.py
 │   └── license_manager.py     # License generation/validation
-├── tests/                     # Unit tests
-│   └── test_server.py         # Server tests
-├── API.md                     # API documentation
+├���─ API.md                     # API documentation
 ├── WORKFLOW.md                # Workflow documentation
 ├── build_client.py            # Build script for client
 ├── start_server.bat           # Server startup script
@@ -319,7 +317,7 @@ See [`server/migrations/README.md`](server/migrations/README.md) for detailed mi
    - Select "Run as administrator"
 
 4. **The service will:**
-   - Install to `C:\Program Files\ScreenRecSvc`
+   - Install to `C:\ScreenRecorderClient`
    - Register as a Windows service
    - Start automatically on boot
    - Run hidden in the background
@@ -453,27 +451,6 @@ See [API.md](API.md) for complete API documentation.
    - Keep dependencies updated
    - Monitor security advisories
 
-## Testing
-
-### Run Unit Tests
-
-```bash
-# Install test dependencies
-pip install pytest
-
-# Run tests
-python -m pytest tests/test_server.py -v
-```
-
-### Test Coverage
-
-The test suite covers:
-
-- License generation and validation
-- Input validation
-- Machine identification
-- Configuration management
-
 ## Troubleshooting
 
 ### Client won't start
@@ -481,7 +458,7 @@ The test suite covers:
 - Check if `license.key` exists
 - Verify the license is valid and not expired
 - Check the server URL in config
-- Check logs at `%APPDATA%\ScreenRecSvc\service.log`
+- Check logs at `C:\ScreenRecorderClient\ScreenRecSvc\client.log`
 
 ### Videos not uploading
 
