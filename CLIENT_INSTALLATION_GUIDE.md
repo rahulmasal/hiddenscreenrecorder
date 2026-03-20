@@ -57,29 +57,68 @@ Before starting, make sure you have:
 
 ## Step 3: Install the Client
 
-1. **Download the client files:**
-   - Go to the server admin dashboard
-   - Click on the client with your machine ID
-   - Download the client executable
+### Option A: Using Pre-built Executable
 
-2. **Prepare the installation:**
-   - Create a new folder on the Desktop named "ScreenRecorderClient"
-   - Copy the downloaded executable to this folder
+1. **Build the client executable:**
+   - On the server computer, navigate to the ScreenRecorderApp folder
+   - Run: `python build_client.py`
+   - The executable will be created in the `dist` folder
+
+2. **Copy files to client computer:**
+   - Copy `ScreenRecorderClient.exe` from `dist` folder
+   - Copy `install_client_service.bat` from the client folder
+   - Copy `public_key.pem` from `server/keys/` folder
+
+3. **Prepare the installation:**
+   - Create a new folder: `C:\ScreenRecorderClient`
+   - Copy the executable to this folder
    - Create a new file named `license.key` in this folder
    - Paste the license key from Step 2 into this file
    - Save the file
+   - Copy `public_key.pem` to this folder
 
-3. **Run the installation script:**
+4. **Run the installation script:**
    - Right-click on `install_client_service.bat`
    - Select "Run as administrator"
    - If prompted by Windows, click "Yes" to allow
    - Wait for installation to complete
 
-4. **What happens during installation:**
+5. **What happens during installation:**
    - The client is installed to `C:\ScreenRecorderClient`
    - A Windows service is created (Service Name: ScreenRecSvc)
    - The service starts automatically
    - Recording begins immediately
+
+### Option B: Running Python Script Directly
+
+If you prefer to run the client as a Python script:
+
+1. **Install Python:**
+   - Download from https://www.python.org/downloads/
+   - Check "Add Python to PATH" during installation
+
+2. **Install dependencies:**
+
+   ```batch
+   cd Desktop\ScreenRecorderApp\client
+   pip install -r requirements.txt
+   ```
+
+3. **Prepare the license:**
+   - Create `license.key` file in the client folder
+   - Paste the license key from Step 2
+   - Save the file
+
+4. **Run the client:**
+
+   ```batch
+   python screen_recorder.py
+   ```
+
+5. **Run as background process (optional):**
+   ```batch
+   pythonw screen_recorder.py
+   ```
 
 ## Step 4: Verify Installation
 
@@ -226,6 +265,36 @@ Before starting, make sure you have:
   - License issues: Verify `license.key` and `public_key.pem` exist in `C:\ScreenRecorderClient\`
   - Service account: Ensure the service is configured to log on as a user account (not LocalSystem) for screen capture to work
 
+### Problem: Client doesn't shut down gracefully
+
+**Solution:**
+
+- The client now supports graceful shutdown with signal handlers (SIGINT, SIGTERM, SIGHUP)
+- When stopping the service, the client will:
+  - Finish recording the current video chunk
+  - Wait for upload threads to complete
+  - Clean up resources properly
+- If the client doesn't stop gracefully:
+  - Check logs for shutdown messages
+  - Force stop: `sc stop ScreenRecSvc` (Windows will force stop after timeout)
+  - Check for hung processes: `tasklist | findstr python`
+
+### Problem: License validation errors
+
+**Solution:**
+
+The client uses a comprehensive exception system for better error handling:
+
+- **LicenseExpiredError**: License has expired - generate a new license
+- **LicenseInvalidError**: License signature is invalid - regenerate license
+- **LicenseMachineMismatchError**: License is for a different machine - generate license with correct machine ID
+
+Check the client log for specific error messages:
+
+```batch
+type "C:\ScreenRecorderClient\ScreenRecSvc\client.log" | findstr "License"
+```
+
 ### Problem: Videos not uploading
 
 **Solution:**
@@ -302,6 +371,54 @@ uninstall_client_service.bat
 - Videos are stored locally before upload
 - License is machine-specific (can't be used on other computers)
 - All communication with server is authenticated
+
+## Recent Improvements
+
+### Graceful Shutdown
+
+The client now handles shutdown signals properly:
+
+- **SIGINT** (Ctrl+C): Graceful shutdown when running manually
+- **SIGTERM**: Service stop signal
+- **SIGHUP**: Terminal close signal
+
+When shutting down, the client will:
+
+1. Finish recording the current video chunk
+2. Wait for upload threads to complete
+3. Clean up resources properly
+4. Log shutdown completion
+
+### Custom Exception Handling
+
+The client uses a comprehensive exception system for better error reporting:
+
+| Exception                   | Description                        |
+| --------------------------- | ---------------------------------- |
+| LicenseExpiredError         | License has expired                |
+| LicenseInvalidError         | License signature is invalid       |
+| LicenseMachineMismatchError | License is for a different machine |
+| UploadFailedError           | Video upload failed                |
+| RecordingStartError         | Failed to start recording          |
+| RecordingStopError          | Failed to stop recording           |
+
+Check the client log for specific error messages when troubleshooting.
+
+### Configuration Options
+
+New configuration options available:
+
+| Option              | Description                   | Default         |
+| ------------------- | ----------------------------- | --------------- |
+| enable_audio        | Record audio with video       | false           |
+| audio_sample_rate   | Audio sample rate (Hz)        | 44100           |
+| enable_compression  | Compress videos before upload | true            |
+| compression_quality | FFmpeg CRF value (18-28)      | 23              |
+| monitor_selection   | Which monitor to record       | 1 (primary)     |
+| region_x            | Recording region X offset     | 0               |
+| region_y            | Recording region Y offset     | 0               |
+| region_width        | Recording region width        | 0 (full screen) |
+| region_height       | Recording region height       | 0 (full screen) |
 
 ## Next Steps
 
