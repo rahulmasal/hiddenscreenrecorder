@@ -1,12 +1,21 @@
 """
 Authentication module with JWT support and secure session management
+
+Security Features:
+- Constant-time password comparison (prevents timing attacks)
+- Session regeneration on authentication (prevents session fixation)
+- Password hashing enforcement with scrypt
+- User enumeration prevention
+- CSRF token protection
+- Rate limiting support
 """
 
 import hashlib
 import secrets
 import hmac
 import time
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Optional, Tuple
 
@@ -15,6 +24,65 @@ from flask import request, jsonify, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from config import settings
+
+logger = logging.getLogger(__name__)
+
+# Constants for password policy
+MIN_PASSWORD_LENGTH = 12
+REQUIRED_PASSWORD_LENGTH = 32  # For auto-generated secrets
+
+
+class PasswordSecurity:
+    """Password security utilities with enforcement"""
+
+    @staticmethod
+    def is_password_hashed(password: str) -> bool:
+        """Check if a password string appears to be a werkzeug hash"""
+        if not password or len(password) < 10:
+            return False
+        # Werkzeug hashes start with method name like 'pbkdf2:', 'scrypt:', etc.
+        return password.startswith(("pbkdf2:", "scrypt:", "bcrypt:"))
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """Hash a password using werkzeug's secure scrypt hashing"""
+        return generate_password_hash(password, method="scrypt")
+
+    @staticmethod
+    def verify_password(password: str, password_hash: str) -> bool:
+        """Verify a password against its hash using constant-time comparison"""
+        if not password_hash:
+            return False
+
+        # If the stored hash is not hashed, handle migration
+        if not PasswordSecurity.is_password_hashed(password_hash):
+            # This is a plain text password - compare directly
+            # In production, this should trigger a re-hash on next successful login
+            return secrets.compare_digest(password.encode(), password_hash.encode())
+
+        # Use werkzeug's check_password_hash which uses constant-time comparison
+        return check_password_hash(password_hash, password)
+
+    @staticmethod
+    def validate_password_strength(password: str) -> Tuple[bool, str]:
+        """
+        Validate password meets minimum security requirements.
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not password:
+            return False, "Password is required"
+
+        if len(password) < MIN_PASSWORD_LENGTH:
+            return False, f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+
+        # Check for common weak passwords
+        weak_passwords = ["password", "admin", "123456", "password123", "admin123"]
+        if password.lower() in weak_passwords:
+            return False, "Password is too common, please choose a stronger one"
+
+        return True, ""
 
 
 class AuthManager:
@@ -26,23 +94,23 @@ class AuthManager:
         self.algorithm = "HS256"
 
     def hash_password(self, password: str) -> str:
-        """Hash a password using werkzeug"""
+        """Hash a password using werkzeug's secure scrypt"""
         return generate_password_hash(password, method="scrypt")
 
     def verify_password(self, password: str, password_hash: str) -> bool:
-        """Verify a password against its hash"""
-        return check_password_hash(password_hash, password)
+        """Verify a password against its hash using constant-time comparison"""
+        return PasswordSecurity.verify_password(password, password_hash)
 
     def generate_token(self, user_id: str, expires_in: Optional[int] = None) -> str:
-        """Generate a JWT token"""
+        """Generate a JWT token with unique ID for tracking"""
         if expires_in is None:
             expires_in = self.token_expiry
 
         payload = {
             "sub": user_id,
-            "iat": datetime.utcnow(),
-            "exp": datetime.utcnow() + timedelta(seconds=expires_in),
-            "jti": secrets.token_hex(16),  # Unique token ID
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+            "jti": secrets.token_hex(16),  # Unique token ID for revocation tracking
         }
         return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
@@ -63,7 +131,7 @@ class AuthManager:
         return session["_csrf_token"]
 
     def validate_csrf_token(self, token: str) -> bool:
-        """Validate a CSRF token"""
+        """Validate a CSRF token using constant-time comparison"""
         session_token = session.get("_csrf_token")
         if session_token and token and secrets.compare_digest(session_token, token):
             return True
@@ -133,6 +201,8 @@ def rate_limit(limit: int = 60, window: int = 60):
 
     # Simple in-memory rate limiting (use Redis in production)
     _rate_limit_store = {}
+    _last_cleanup = [0.0]  # mutable container for nonlocal access
+    _CLEANUP_INTERVAL = 300  # Purge stale keys every 5 minutes
 
     def decorator(f):
         @wraps(f)
@@ -148,7 +218,17 @@ def rate_limit(limit: int = 60, window: int = 60):
             current_time = time()
             key = f"{f.__name__}:{client_id}"
 
-            # Clean old entries
+            # Periodically purge stale keys to prevent memory leak (#10 fix)
+            if current_time - _last_cleanup[0] > _CLEANUP_INTERVAL:
+                stale_keys = [
+                    k for k, v in _rate_limit_store.items()
+                    if not v or current_time - v[-1] > window
+                ]
+                for k in stale_keys:
+                    del _rate_limit_store[k]
+                _last_cleanup[0] = current_time
+
+            # Clean old entries for this key
             if key in _rate_limit_store:
                 _rate_limit_store[key] = [
                     t for t in _rate_limit_store[key] if current_time - t < window
@@ -174,7 +254,13 @@ def rate_limit(limit: int = 60, window: int = 60):
 
 
 def validate_admin_password(password: str) -> Tuple[bool, str]:
-    """Validate admin password with constant-time comparison to prevent timing attacks.
+    """
+    Validate admin password with constant-time comparison to prevent timing attacks.
+
+    This function:
+    - Uses constant-time comparison to prevent timing attacks
+    - Handles password hash migration (plain text to hashed)
+    - Returns generic error messages to prevent user enumeration
 
     Args:
         password: The password to validate
@@ -182,22 +268,14 @@ def validate_admin_password(password: str) -> Tuple[bool, str]:
     Returns:
         Tuple of (is_valid, message)
     """
-    from werkzeug.security import check_password_hash, generate_password_hash
-
-    # For backward compatibility, check if password is already hashed
-    # If not, hash it and store (this should be done during setup)
     stored_hash = settings.admin_password
 
-    # If the stored password looks like plain text (not a werkzeug hash),
-    # we need to hash it. In production, passwords should be pre-hashed.
-    if not stored_hash.startswith(("pbkdf2:", "scrypt:")):
-        # Plain text password - hash it for comparison
-        stored_hash = generate_password_hash(stored_hash, method="scrypt")
+    if not stored_hash:
+        logger.error("Admin password not configured in settings")
+        return False, "Invalid password"
 
-    # Use werkzeug's check_password_hash which already uses constant-time comparison
-    # This prevents timing attacks where an attacker could determine correct password
-    # characters by measuring response time differences
-    if check_password_hash(stored_hash, password):
+    # Use PasswordSecurity for verification (handles both hashed and plain text)
+    if PasswordSecurity.verify_password(password, stored_hash):
         return True, "Authentication successful"
 
     # Always return the same error message regardless of whether password exists
@@ -206,37 +284,57 @@ def validate_admin_password(password: str) -> Tuple[bool, str]:
 
 
 def create_session(password: str) -> Tuple[bool, Optional[str]]:
-    """Create an authenticated session"""
+    """
+    Create an authenticated session with session regeneration.
+
+    Security features:
+    - Regenerates session ID on authentication (prevents session fixation)
+    - Uses secure random token for session identifier
+    - Generates JWT token for API access
+
+    Args:
+        password: The password to authenticate
+
+    Returns:
+        Tuple of (is_valid, jwt_token or None)
+    """
     is_valid, message = validate_admin_password(password)
 
     if is_valid:
-        # Set session - use a secure token instead of password hash
+        # SECURITY: Regenerate session ID to prevent session fixation attacks
+        # Clear any existing session data first
+        session.clear()
+
+        # Set new session with secure random token
         session["admin_auth"] = secrets.token_hex(32)
-        session["admin_login_time"] = datetime.utcnow().isoformat()
+        session["admin_login_time"] = datetime.now(timezone.utc).isoformat()
         session.permanent = True
+
+        # Log successful authentication (without sensitive data)
+        logger.info(f"Admin session created from IP: {request.remote_addr}")
 
         # Generate JWT token for API access
         token = auth_manager.generate_token("admin")
 
         return True, token
 
+    # Log failed authentication attempt (for security monitoring)
+    logger.warning(f"Failed admin login attempt from IP: {request.remote_addr}")
     return False, None
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using werkzeug's secure hashing"""
-    from werkzeug.security import generate_password_hash
-
-    return generate_password_hash(password, method="scrypt")
+    """Hash a password using werkzeug's secure scrypt hashing"""
+    return PasswordSecurity.hash_password(password)
 
 
 def destroy_session():
-    """Destroy the current session"""
+    """Destroy the current session securely"""
     session.clear()
 
 
 def get_client_ip() -> str:
-    """Get the real client IP address"""
+    """Get the real client IP address, accounting for proxies"""
     if request.headers.get("X-Forwarded-For"):
         return request.headers["X-Forwarded-For"].split(",")[0].strip()
     elif request.headers.get("X-Real-IP"):

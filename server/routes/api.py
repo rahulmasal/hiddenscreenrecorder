@@ -4,7 +4,7 @@ Version 1 API endpoints with proper validation and error handling
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -125,11 +125,11 @@ def get_client_ip() -> str:
 # ============ License Validation Decorator ============
 
 
-def validate_license_in_request(f):
+def validate_license_in_request(fn):
     """Decorator to validate license in request"""
     from functools import wraps
 
-    @wraps(f)
+    @wraps(fn)
     def decorated_function(*args, **kwargs):
         # Get license from header (preferred) or form data
         license_token = request.headers.get("X-License-Token")
@@ -151,8 +151,8 @@ def validate_license_in_request(f):
         # Load public key
         public_key_path = settings.keys_folder / "public_key.pem"
         if public_key_path.exists():
-            with open(public_key_path, "r") as f:
-                lm.load_public_key(f.read())
+            with open(public_key_path, "r") as key_file:
+                lm.load_public_key(key_file.read())
         else:
             return jsonify({"error": "Server configuration error"}), 500
 
@@ -165,7 +165,7 @@ def validate_license_in_request(f):
         g.license_data = result
         g.machine_id = machine_id
 
-        return f(*args, **kwargs)
+        return fn(*args, **kwargs)
 
     return decorated_function
 
@@ -201,7 +201,7 @@ def upload_video():
             return jsonify({"error": error}), 400
 
         machine_id = g.machine_id
-        timestamp = request.form.get("timestamp", datetime.utcnow().isoformat())
+        timestamp = request.form.get("timestamp", datetime.now(timezone.utc).isoformat())
 
         # Get or create client
         client = db.session.execute(
@@ -214,7 +214,7 @@ def upload_video():
             db.session.flush()
 
         # Update last seen
-        client.last_seen = datetime.utcnow()
+        client.last_seen = datetime.now(timezone.utc)
 
         # Create client-specific folder
         client_folder = settings.upload_folder / machine_id
@@ -222,7 +222,7 @@ def upload_video():
 
         # Generate unique filename
         filename = secure_filename(file.filename)
-        date_prefix = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        date_prefix = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         unique_filename = f"{date_prefix}_{filename}"
         filepath = client_folder / unique_filename
 
@@ -350,7 +350,7 @@ def heartbeat():
             db.select(Client).where(Client.machine_id == machine_id)
         ).scalar_one_or_none()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if client is None:
             client = Client(machine_id=machine_id)
             client.last_seen = now
@@ -380,7 +380,7 @@ def heartbeat():
             {
                 "success": True,
                 "message": "Heartbeat received",
-                "server_time": datetime.utcnow().isoformat(),
+                "server_time": datetime.now(timezone.utc).isoformat(),
             }
         )
 
@@ -422,14 +422,39 @@ def get_public_key():
 
 @api_bp.route("/health", methods=["GET"])
 def health_check():
-    """Health check endpoint for monitoring"""
-    return jsonify(
-        {
-            "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
-            "version": "1.0.0",
-        }
-    )
+    """Health check endpoint for monitoring with detailed system status"""
+    try:
+        from health_monitor import HealthMonitor, HealthStatus
+
+        # Initialize monitor with correct paths - use instance folder for data
+        instance_folder = (
+            settings.upload_folder.parent
+            if settings.upload_folder.parent
+            and settings.upload_folder.parent.name == "instance"
+            else settings.upload_folder.parent
+        )
+        monitor = HealthMonitor(
+            upload_folder=str(settings.upload_folder),
+            data_folder=str(instance_folder or "."),
+        )
+
+        # Run health checks with database session
+        health_status = monitor.check_all(db.session)
+
+        return jsonify(health_status)
+    except Exception as e:
+        logger.error(f"Health check error: {e}", exc_info=True)
+        return (
+            jsonify(
+                {
+                    "overall": "error",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "version": "1.0.0",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 # ============ Video Streaming Routes ============

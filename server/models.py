@@ -2,7 +2,7 @@
 Database models for the Screen Recorder Server
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import String, Text, Boolean, DateTime, Integer, JSON
@@ -20,9 +20,13 @@ class Client(db.Model):
     machine_id: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True
     )
-    first_seen: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
     last_seen: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     system_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
@@ -49,7 +53,9 @@ class License(db.Model):
         String(64), unique=True, nullable=False, index=True
     )
     license_key: Mapped[str] = mapped_column(Text, nullable=False)
-    issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     features: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -63,12 +69,12 @@ class License(db.Model):
     @property
     def is_expired(self) -> bool:
         """Check if license is expired"""
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
     @property
     def days_remaining(self) -> int:
         """Get days remaining until expiration"""
-        delta = self.expires_at - datetime.utcnow()
+        delta = self.expires_at - datetime.now(timezone.utc)
         return max(0, delta.days)
 
     def __repr__(self) -> str:
@@ -85,7 +91,9 @@ class Video(db.Model):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
-    upload_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    upload_time: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
     client_timestamp: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
@@ -121,7 +129,7 @@ class AuditLog(db.Model):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, index=True
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -142,7 +150,9 @@ class ApiKey(db.Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     key_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_used: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -155,8 +165,12 @@ class ApiKey(db.Model):
 def init_db(app) -> None:
     """Initialize database with app"""
     db.init_app(app)
-    with app.app_context():
-        db.create_all()
+    
+    import sys
+    # Don't create tables if we're running database migrations
+    if not (len(sys.argv) > 1 and sys.argv[1] == 'db'):
+        with app.app_context():
+            db.create_all()
 
 
 def get_or_create_client(machine_id: str, system_info: Optional[dict] = None) -> Client:
@@ -170,7 +184,7 @@ def get_or_create_client(machine_id: str, system_info: Optional[dict] = None) ->
         db.session.add(client)
         db.session.commit()
     else:
-        client.last_seen = datetime.utcnow()
+        client.last_seen = datetime.now(timezone.utc)
         if system_info:
             client.system_info = system_info
         db.session.commit()

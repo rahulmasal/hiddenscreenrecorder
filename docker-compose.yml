@@ -1,0 +1,74 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: screenrecorder-server
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist data outside container
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./licenses:/app/licenses
+      - ./keys:/app/keys
+    environment:
+      # Required: Set these in production!
+      - SECRET_KEY=${SECRET_KEY:-change-this-to-a-secure-random-string}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-this-to-a-secure-password}
+      # Server configuration
+      - PORT=5000
+      - HOST=0.0.0.0
+      - DATABASE_URL=sqlite:///data/screenrecorder.db
+      - UPLOAD_FOLDER=/app/uploads
+      - LICENSE_FOLDER=/app/licenses
+      - KEYS_FOLDER=/app/keys
+      # Optional: Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Optional: Rate limiting
+      - RATE_LIMIT=${RATE_LIMIT:-true}
+      # Optional: HTTPS enforcement (set to true in production with proper SSL)
+      - ENFORCE_HTTPS=${ENFORCE_HTTPS:-false}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/v1/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - screenrecorder
+
+  # Optional: Nginx reverse proxy for production
+  # Uncomment this section for production deployment with SSL
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: screenrecorder-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     server:
+  #       condition: service_healthy
+  #   networks:
+  #     - screenrecorder
+
+networks:
+  screenrecorder:
+    driver: bridge
+
+volumes:
+  data:
+  uploads:
+  licenses:
+  keys:

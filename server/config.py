@@ -57,12 +57,20 @@ class Settings(BaseSettings):
     @field_validator("admin_password")
     @classmethod
     def validate_admin_password(cls, v: str) -> str:
-        if not v or v == "changeme123456":
+        # Known insecure defaults that must be changed in production
+        insecure_defaults = {
+            "changeme123456",
+            "admin12345678",
+            "password123456",
+        }
+        if not v or v in insecure_defaults:
             import warnings
 
             warnings.warn(
-                "ADMIN_PASSWORD should be set via environment variable for production!",
+                "ADMIN_PASSWORD is set to an insecure default! "
+                "Set it via the ADMIN_PASSWORD environment variable for production!",
                 UserWarning,
+                stacklevel=2,
             )
         if len(v) < 12:
             raise ValueError("ADMIN_PASSWORD must be at least 12 characters!")

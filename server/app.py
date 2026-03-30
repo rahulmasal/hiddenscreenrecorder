@@ -6,11 +6,12 @@ Main Flask application with modular architecture
 import os
 import sys
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, render_template, redirect, url_for, flash, session, request
 from flask_cors import CORS
+from flask_migrate import Migrate
 
 # Add shared module to path
 # Check multiple locations for the shared module
@@ -28,17 +29,28 @@ for _shared_path in _shared_paths:
 # Import local modules
 from config import settings
 from models import db, init_db, Client, License, Video, AuditLog
-from auth import auth_manager, require_auth, rate_limit, create_session, destroy_session
+from auth import auth_manager, require_auth, require_csrf, rate_limit, create_session, destroy_session
 from routes.api import api_bp, legacy_bp
 
 # Import license manager
 from license_manager import LicenseManager
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.log_level), format=settings.log_format
-)
-logger = logging.getLogger(__name__)
+# Configure logging with structured logging support
+try:
+    from logging_config import setup_logging, ContextLogger
+
+    setup_logging(
+        level=settings.log_level,
+        log_format="colored",  # Use 'structured' for JSON logging in production
+        service_name="screen-recorder-server",
+    )
+    logger = logging.getLogger(__name__)
+except ImportError:
+    # Fallback to basic logging if logging_config is not available
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level), format=settings.log_format
+    )
+    logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -53,9 +65,23 @@ CORS(app)
 # Initialize database
 init_db(app)
 
+# Initialize Flask-Migrate
+migrate = Migrate(app, db)
+
 # Register blueprints
 app.register_blueprint(api_bp)
 app.register_blueprint(legacy_bp)
+
+# Initialize WebSocket manager (optional)
+try:
+    from websocket_manager import ws_manager
+
+    if ws_manager.init_app(app):
+        logger.info("WebSocket manager initialized")
+    else:
+        logger.info("WebSocket manager not available (flask-socketio not installed)")
+except ImportError:
+    logger.info("WebSocket manager module not available")
 
 
 # ============ Security Headers ============
@@ -461,6 +487,7 @@ def create_templates():
                                     <td>{{ license.expires_at[:10] }}</td>
                                     <td>
                                         <form action="/admin/delete-license/{{ license.machine_id }}" method="POST" style="display:inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                             <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this license?')">Delete</button>
                                         </form>
                                     </td>
@@ -611,6 +638,7 @@ def create_templates():
                     <td>
                         <a href="/admin/download/{{ machine_id }}/{{ video.filename }}" class="btn btn-sm btn-success">Download</a>
                         <form action="/admin/delete-video/{{ machine_id }}/{{ video.filename }}" method="POST" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this video?')">Delete</button>
                         </form>
                     </td>
@@ -628,9 +656,9 @@ def create_templates():
 
     for name, content in templates.items():
         template_path = templates_dir / name
-        if not template_path.exists():
-            with open(template_path, "w") as f:
-                f.write(content)
+        # Always overwrite so code changes to templates take effect (#15 fix)
+        with open(template_path, "w") as f:
+            f.write(content)
 
     # Add datetime filter
     app.jinja_env.filters["datetime"] = lambda x: (
@@ -740,14 +768,17 @@ def admin_dashboard():
         total_videos=total_videos,
         total_size=total_size,
         total_clients=len(clients),
+        csrf_token=auth_manager.generate_csrf_token(),
     )
 
 
 @app.route("/admin/generate-license", methods=["GET", "POST"])
 @require_auth
+@require_csrf
 def generate_license():
     """Generate a new license"""
     from flask import request
+    from datetime import timedelta, timezone
 
     if request.method == "POST":
         machine_id = request.form.get("machine_id")
@@ -768,14 +799,18 @@ def generate_license():
             machine_id, expiry_days=expiry_days, features=features_dict
         )
 
-        # Save to database
-        from datetime import timedelta
+        # Link license to client if client exists (#8 fix)
+        now = datetime.now(timezone.utc)
+        client = db.session.execute(
+            db.select(Client).where(Client.machine_id == machine_id)
+        ).scalar_one_or_none()
 
         license_obj = License(
             machine_id=machine_id,
             license_key=license_key,
-            expires_at=datetime.utcnow() + timedelta(days=expiry_days),
+            expires_at=now + timedelta(days=expiry_days),
             features=features_dict,
+            client_id=client.id if client else None,
         )
         db.session.add(license_obj)
         db.session.commit()
@@ -783,7 +818,7 @@ def generate_license():
         license_info = {
             "machine_id": machine_id,
             "license_key": license_key,
-            "expires_at": (datetime.utcnow() + timedelta(days=expiry_days)).isoformat(),
+            "expires_at": (now + timedelta(days=expiry_days)).isoformat(),
             "features": features_dict,
         }
 
@@ -822,7 +857,12 @@ def view_client(machine_id):
         for v in videos
     ]
 
-    return render_template("client.html", machine_id=machine_id, videos=video_data)
+    return render_template(
+        "client.html",
+        machine_id=machine_id,
+        videos=video_data,
+        csrf_token=auth_manager.generate_csrf_token(),
+    )
 
 
 @app.route("/admin/download/<machine_id>/<filename>")
@@ -842,6 +882,7 @@ def download_video(machine_id, filename):
 
 @app.route("/admin/delete-license/<machine_id>", methods=["POST"])
 @require_auth
+@require_csrf
 def delete_license(machine_id):
     """Delete a license"""
     license_obj = db.session.execute(
@@ -860,19 +901,27 @@ def delete_license(machine_id):
 
 @app.route("/admin/delete-video/<machine_id>/<filename>", methods=["POST"])
 @require_auth
+@require_csrf
 def delete_video(machine_id, filename):
     """Delete a video file"""
     filepath = settings.upload_folder / machine_id / filename
 
     if filepath.exists():
         filepath.unlink()
-        # Also delete from database
-        video = db.session.execute(
-            db.select(Video).where(Video.filename == filename)
+        # Also delete from database — filter by client to avoid deleting another client's video (#12 fix)
+        client = db.session.execute(
+            db.select(Client).where(Client.machine_id == machine_id)
         ).scalar_one_or_none()
-        if video:
-            db.session.delete(video)
-            db.session.commit()
+        if client:
+            video = db.session.execute(
+                db.select(Video).where(
+                    Video.filename == filename,
+                    Video.client_id == client.id,
+                )
+            ).scalar_one_or_none()
+            if video:
+                db.session.delete(video)
+                db.session.commit()
         flash("Video deleted", "success")
     else:
         flash("File not found", "error")
@@ -895,7 +944,7 @@ def admin_logs():
     per_page = max(10, min(per_page, 200))  # clamp
     offset = (page - 1) * per_page
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     since_24h = now - timedelta(hours=24)
 
     # ---- Summary counters ----
@@ -962,22 +1011,20 @@ def admin_logs():
     if filter_action:
         log_query = log_query.where(AuditLog.action == filter_action)
 
-    total_logs = (
-        db.session.execute(
-            db.select(db.func.count()).select_from(log_query.subquery())
-        ).scalar()
-        or 0
-    )
-
+    # Fetch all matching logs (before pagination) so we can resolve and filter machine_id
     logs_raw = (
-        db.session.execute(log_query.limit(per_page).offset(offset)).scalars().all()
+        db.session.execute(log_query).scalars().all()
     )
 
-    # Resolve machine_id for each log via entity_id (video upload links to Video->Client)
+    # Resolve machine_id for each log via details or entity_id
     log_data = []
     for log in logs_raw:
         machine_id_label = None
-        if log.action == "video_upload" and log.entity_id:
+        # Check details dict first (heartbeat stores machine_id there)
+        if log.details and "machine_id" in log.details:
+            mid = log.details["machine_id"]
+            machine_id_label = (mid[:16] + "...") if len(mid) > 16 else mid
+        elif log.action == "video_upload" and log.entity_id:
             video = db.session.get(Video, log.entity_id)
             if video and video.client:
                 machine_id_label = video.client.machine_id[:16] + "..."
@@ -995,7 +1042,7 @@ def admin_logs():
             }
         )
 
-    # Filter by machine_id label after resolution (simple substring match)
+    # Filter by machine_id BEFORE pagination so counts are correct (#11 fix)
     if filter_machine_id:
         log_data = [
             l
@@ -1003,7 +1050,9 @@ def admin_logs():
             if l["machine_id"] and filter_machine_id.lower() in l["machine_id"].lower()
         ]
 
+    total_logs = len(log_data)
     total_pages = max(1, (total_logs + per_page - 1) // per_page)
+    log_data = log_data[offset : offset + per_page]
 
     return render_template(
         "connection_logs.html",

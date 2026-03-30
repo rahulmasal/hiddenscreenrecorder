@@ -274,6 +274,13 @@ class Config:
 class RetryHandler:
     """Handles retry logic with exponential backoff"""
 
+    # Retryable error types - defined as class attribute to avoid import timing issues
+    RETRYABLE_ERRORS = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+    )
+
     def __init__(
         self, base_delay: float = 1.0, max_delay: float = 300.0, max_retries: int = 5
     ):
@@ -302,13 +309,7 @@ class RetryHandler:
             return False
 
         # Retry on network errors, timeouts, and 5xx server errors
-        retryable_errors = (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.Timeout,
-            requests.exceptions.ChunkedEncodingError,
-        )
-
-        if isinstance(error, retryable_errors):
+        if isinstance(error, RetryHandler.RETRYABLE_ERRORS):
             return True
 
         # Check for HTTP 5xx errors
@@ -327,6 +328,7 @@ class OfflineQueue:
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self.max_storage_bytes = max_storage_mb * 1024 * 1024
         self.queue: List[UploadTask] = []
+        self._lock = threading.Lock()  # Thread-safe access to queue (#13 fix)
         self._load_queue()
 
     def _load_queue(self) -> None:
@@ -377,38 +379,40 @@ class OfflineQueue:
 
     def add(self, video_path: Path) -> bool:
         """Add a video to the offline queue"""
-        # Check storage limit
-        current_size = self.get_total_size()
-        video_size = video_path.stat().st_size if video_path.exists() else 0
-        logger.info(
-            f"[OfflineQueue] Attempting to add {video_path.name} (size: {video_size} bytes, current queue size: {current_size} bytes)"
-        )
-
-        if current_size + video_size > self.max_storage_bytes:
-            logger.warning(
-                f"[OfflineQueue] Offline storage limit reached ({current_size} + {video_size} > {self.max_storage_bytes}), removing oldest videos"
+        with self._lock:
+            current_size = self.get_total_size()
+            video_size = video_path.stat().st_size if video_path.exists() else 0
+            logger.info(
+                f"[OfflineQueue] Attempting to add {video_path.name} (size: {video_size} bytes, current queue size: {current_size} bytes)"
             )
-            self._remove_oldest_until_fits(video_size)
 
-        task = UploadTask(video_path=video_path, timestamp=datetime.now(timezone.utc))
-        self.queue.append(task)
-        self._save_queue()
-        logger.info(
-            f"[OfflineQueue] Added video to offline queue: {video_path.name} (queue now has {len(self.queue)} items)"
-        )
-        return True
+            if current_size + video_size > self.max_storage_bytes:
+                logger.warning(
+                    f"[OfflineQueue] Offline storage limit reached ({current_size} + {video_size} > {self.max_storage_bytes}), removing oldest videos"
+                )
+                self._remove_oldest_until_fits(video_size)
+
+            task = UploadTask(video_path=video_path, timestamp=datetime.now(timezone.utc))
+            self.queue.append(task)
+            self._save_queue()
+            logger.info(
+                f"[OfflineQueue] Added video to offline queue: {video_path.name} (queue now has {len(self.queue)} items)"
+            )
+            return True
 
     def remove(self, task: UploadTask) -> None:
         """Remove a task from the queue"""
-        if task in self.queue:
-            self.queue.remove(task)
-            self._save_queue()
+        with self._lock:
+            if task in self.queue:
+                self.queue.remove(task)
+                self._save_queue()
 
     def get_next(self) -> Optional[UploadTask]:
         """Get the next task to process"""
-        if self.queue:
-            return self.queue[0]
-        return None
+        with self._lock:
+            if self.queue:
+                return self.queue[0]
+            return None
 
     def get_total_size(self) -> int:
         """Get total size of queued videos"""
@@ -419,7 +423,7 @@ class OfflineQueue:
         )
 
     def _remove_oldest_until_fits(self, needed_space: int) -> None:
-        """Remove oldest videos until there's enough space"""
+        """Remove oldest videos until there's enough space (caller must hold lock)"""
         while (
             self.queue and self.get_total_size() + needed_space > self.max_storage_bytes
         ):
@@ -433,11 +437,13 @@ class OfflineQueue:
 
     def is_empty(self) -> bool:
         """Check if queue is empty"""
-        return len(self.queue) == 0
+        with self._lock:
+            return len(self.queue) == 0
 
     def count(self) -> int:
         """Get number of items in queue"""
-        return len(self.queue)
+        with self._lock:
+            return len(self.queue)
 
 
 class HeartbeatManager:
@@ -526,6 +532,7 @@ class ScreenRecorder:
         self.recording_thread: Optional[threading.Thread] = None
         self.upload_thread: Optional[threading.Thread] = None
         self.video_chunks: List[Path] = []
+        self._video_chunks_lock = threading.Lock()  # Thread-safe access to video_chunks
         self.current_video: Optional[Path] = None
         self.video_writer: Optional[cv2.VideoWriter] = None
         # MSS is not thread-safe, create instance in recording thread
@@ -535,6 +542,7 @@ class ScreenRecorder:
         self.license_key: Optional[str] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
+        self._owner_runner: Optional["HiddenRunner"] = None  # Set by HiddenRunner
 
         # Register signal handlers for graceful shutdown
         if sys.platform == "win32":
@@ -556,16 +564,11 @@ class ScreenRecorder:
         self.audio_enabled = self.config.enable_audio and HAS_AUDIO
         # WebSocket client
         self.socket_client: Optional[Any] = None
+        self._ws_reconnect_attempts = 0
+        self._ws_max_reconnect_attempts = 10
+        self._ws_connected = False
         if self.config.use_websocket and HAS_SOCKETIO:
-            try:
-                self.socket_client = socketio_client.Client(
-                    logger=False, engineio_logger=False
-                )
-                self.socket_client.connect(self.config.websocket_url, wait_timeout=5)
-                logger.info("WebSocket client connected")
-            except Exception as ws_err:
-                logger.warning(f"WebSocket connection failed: {ws_err}")
-                self.socket_client = None
+            self._connect_websocket()
         # Initialize retry handler
         self.retry_handler = RetryHandler(
             base_delay=self.config.retry_base_delay,
@@ -594,6 +597,61 @@ class ScreenRecorder:
 
         logger.info(f"ScreenRecorder initialized. Machine ID: {self.machine_id}")
 
+    def _connect_websocket(self) -> None:
+        """Connect to WebSocket server with reconnection logic."""
+        if not self.config.use_websocket or not HAS_SOCKETIO:
+            return
+
+        try:
+            self.socket_client = socketio_client.Client(
+                logger=False, engineio_logger=False
+            )
+
+            # Register event handlers
+            @self.socket_client.event
+            def connect():
+                self._ws_connected = True
+                self._ws_reconnect_attempts = 0
+                logger.info("[WEBSOCKET] Connected to server")
+
+            @self.socket_client.event
+            def disconnect():
+                self._ws_connected = False
+                logger.info("[WEBSOCKET] Disconnected from server")
+
+            @self.socket_client.event
+            def connect_error(data):
+                self._ws_connected = False
+                logger.warning(f"[WEBSOCKET] Connection error: {data}")
+
+            self.socket_client.connect(self.config.websocket_url, wait_timeout=5)
+            logger.info("[WEBSOCKET] Client connected")
+        except Exception as ws_err:
+            self._ws_connected = False
+            logger.warning(f"[WEBSOCKET] Connection failed: {ws_err}")
+            self.socket_client = None
+
+    def _reconnect_websocket(self) -> bool:
+        """Attempt to reconnect to WebSocket with exponential backoff.
+
+        Returns:
+            bool: True if reconnection successful, False otherwise.
+        """
+        if self._ws_reconnect_attempts >= self._ws_max_reconnect_attempts:
+            logger.error(
+                f"[WEBSOCKET] Max reconnection attempts ({self._ws_max_reconnect_attempts}) reached"
+            )
+            return False
+
+        self._ws_reconnect_attempts += 1
+        delay = min(2**self._ws_reconnect_attempts, 30)  # Exponential backoff, max 30s
+        logger.info(
+            f"[WEBSOCKET] Reconnecting (attempt {self._ws_reconnect_attempts}/{self._ws_max_reconnect_attempts}) in {delay}s"
+        )
+        time.sleep(delay)
+        self._connect_websocket()
+        return self._ws_connected
+
     def _signal_handler(self, signum, frame) -> None:
         """Handle shutdown signals gracefully.
 
@@ -618,20 +676,41 @@ class ScreenRecorder:
         # Update state
         self.state = ClientState.STOPPED
 
+        # Stop the HiddenRunner main loop if we were launched from one (#7 fix)
+        if self._owner_runner is not None:
+            self._owner_runner.running = False
+
         logger.info(
             "[SIGNAL] Graceful shutdown initiated, waiting for threads to complete..."
         )
 
     def _load_public_key(self) -> None:
-        """Load public key embedded in the application"""
-        # Public key will be embedded during build
-        public_key_path = Path(__file__).parent / "public_key.pem"
-        if public_key_path.exists():
-            with open(public_key_path, "r") as f:
-                self.license_manager.load_public_key(f.read())
-            logger.info("Public key loaded successfully")
-        else:
-            logger.warning("Public key file not found")
+        """Load public key embedded in the application.
+
+        Search order:
+          1. LOG_DIR/public_key.pem  (ScreenRecSvc folder - easiest to update without rebuilding)
+          2. Same directory as this script (embedded at build time)
+          3. C:\\ScreenRecorderClient\\public_key.pem (installed root)
+        """
+        search_paths = [
+            LOG_DIR / "public_key.pem",
+            Path(__file__).parent / "public_key.pem",
+            Path("C:\\ScreenRecorderClient") / "public_key.pem",
+        ]
+        for key_path in search_paths:
+            if key_path.exists():
+                try:
+                    with open(key_path, "r") as f:
+                        self.license_manager.load_public_key(f.read())
+                    logger.info(f"Public key loaded from: {key_path}")
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to load public key from {key_path}: {e}")
+        logger.warning(
+            "Public key file not found in any search path. "
+            "Searched: " + ", ".join(str(p) for p in search_paths) + ". "
+            "Copy the server's public_key.pem to one of these locations."
+        )
 
     def validate_license(self, license_key: Optional[str] = None) -> Tuple[bool, str]:
         """Validate the license"""
@@ -881,8 +960,9 @@ class ScreenRecorder:
         # Pause audio if enabled
         if self.audio_stream:
             try:
-                # Audio pause logic would go here
-                pass
+                # PyAudio streams can be stopped to pause recording
+                self.audio_stream.stop_stream()
+                logger.info("[PAUSE] Audio stream paused")
             except Exception as e:
                 logger.error(f"[PAUSE] Error pausing audio: {e}")
 
@@ -901,8 +981,9 @@ class ScreenRecorder:
         # Resume audio if enabled
         if self.audio_stream:
             try:
-                # Audio resume logic would go here
-                pass
+                # PyAudio streams can be started to resume recording
+                self.audio_stream.start_stream()
+                logger.info("[RESUME] Audio stream resumed")
             except Exception as e:
                 logger.error(f"[RESUME] Error resuming audio: {e}")
 
@@ -1240,9 +1321,10 @@ class ScreenRecorder:
                         if consecutive_black_frames == max_black_frames_before_warning:
                             logger.warning(
                                 f"[RECORD] Detected {consecutive_black_frames} consecutive dark frames "
-                                f"(mean pixel value: {mean_val:.2f}). This may indicate a screen capture issue."
+                                f"(mean pixel value: {mean_val:.2f}). This may indicate a screen capture issue. "
+                                f"Please ensure the screen is not sleeping or a screensaver is not active."
                             )
-                            # Try to capture from different monitors as fallback
+                            # Log available monitors for debugging (no dynamic switching to avoid dimension mismatch)
                             for test_monitor_idx in range(1, min(len(sct.monitors), 5)):
                                 try:
                                     test_shot = sct.grab(sct.monitors[test_monitor_idx])
@@ -1252,40 +1334,6 @@ class ScreenRecorder:
                                         logger.info(
                                             f"[RECORD] Monitor {test_monitor_idx} mean pixel value: {test_mean:.2f}"
                                         )
-                                        if test_mean > mean_val + 10:
-                                            logger.info(
-                                                f"[RECORD] Switching to monitor {test_monitor_idx} for capture"
-                                            )
-                                            monitor_to_use = test_monitor_idx
-                                            # Update capture region to use the new monitor
-                                            capture_region = self._get_monitor_region(
-                                                sct, monitor_to_use
-                                            )
-                                            width = capture_region["width"]
-                                            height = capture_region["height"]
-                                            logger.info(
-                                                f"[RECORD] Updated capture region to monitor {monitor_to_use}: "
-                                                f"{width}x{height} at ({capture_region['left']}, {capture_region['top']})"
-                                            )
-                                            # Need to recreate video writer with new dimensions
-                                            if self.video_writer is not None:
-                                                self.video_writer.release()
-                                            video_path = self._get_video_path()
-                                            self.video_writer = cv2.VideoWriter(
-                                                str(video_path),
-                                                fourcc,
-                                                fps,
-                                                (width, height),
-                                            )
-                                            if not self.video_writer.isOpened():
-                                                logger.error(
-                                                    f"[RECORD] Failed to open video writer for {video_path}"
-                                                )
-                                                return
-                                            logger.info(
-                                                f"[RECORD] Restarted video writer for new monitor: {video_path.name}"
-                                            )
-                                            break  # Stop testing other monitors once we find a good one
                                 except Exception as monitor_err:
                                     logger.debug(
                                         f"[RECORD] Error testing monitor {test_monitor_idx}: {monitor_err}"
@@ -1311,7 +1359,9 @@ class ScreenRecorder:
                             f"[RECORD] Released video writer for chunk: {video_path.name}"
                         )
 
-                    self.video_chunks.append(video_path)
+                    # Thread-safe append to video_chunks
+                    with self._video_chunks_lock:
+                        self.video_chunks.append(video_path)
                     logger.info(
                         f"[RECORD] Video chunk completed: {video_path.name} (frames: {frames_captured})"
                     )
@@ -1379,46 +1429,56 @@ class ScreenRecorder:
                         )
                         break
 
-                # Upload current chunks
-                chunks_count = len(self.video_chunks)
+                # Upload current chunks (thread-safe access)
+                with self._video_chunks_lock:
+                    chunks_to_process = list(self.video_chunks)
+
+                chunks_count = len(chunks_to_process)
                 if chunks_count > 0:
                     logger.info(
                         f"[UPLOAD] Found {chunks_count} completed chunks ready for upload"
                     )
 
-                for video_path in list(self.video_chunks):
-                    if video_path.exists():
-                        file_size = video_path.stat().st_size
-                        logger.info(
-                            f"[UPLOAD] Attempting upload of completed chunk: {video_path.name} ({file_size} bytes)"
-                        )
-                        task = UploadTask(
-                            video_path=video_path, timestamp=datetime.now(timezone.utc)
-                        )
-                        success = self._upload_video_with_retry(task)
-                        if success:
-                            self.video_chunks.remove(video_path)
-                            try:
-                                video_path.unlink()
-                                logger.info(
-                                    f"[UPLOAD] Successfully uploaded and deleted chunk: {video_path.name}"
-                                )
-                            except OSError as e:
-                                logger.error(
-                                    f"[UPLOAD] Failed to delete uploaded chunk {video_path.name}: {e}"
-                                )
-                        else:
-                            # Add to offline queue for later
-                            logger.warning(
-                                f"[UPLOAD] Upload failed, moving to offline queue: {video_path.name}"
+                    for video_path in chunks_to_process:
+                        if video_path.exists():
+                            file_size = video_path.stat().st_size
+                            logger.info(
+                                f"[UPLOAD] Attempting upload of completed chunk: {video_path.name} ({file_size} bytes)"
                             )
-                            self.offline_queue.add(video_path)
-                            self.video_chunks.remove(video_path)
-                    else:
-                        logger.warning(
-                            f"[UPLOAD] Chunk file missing, removing from tracking: {video_path.name}"
-                        )
-                        self.video_chunks.remove(video_path)
+                            task = UploadTask(
+                                video_path=video_path,
+                                timestamp=datetime.now(timezone.utc),
+                            )
+                            success = self._upload_video_with_retry(task)
+                            if success:
+                                with self._video_chunks_lock:
+                                    if video_path in self.video_chunks:
+                                        self.video_chunks.remove(video_path)
+                                try:
+                                    video_path.unlink()
+                                    logger.info(
+                                        f"[UPLOAD] Successfully uploaded and deleted chunk: {video_path.name}"
+                                    )
+                                except OSError as e:
+                                    logger.error(
+                                        f"[UPLOAD] Failed to delete uploaded chunk {video_path.name}: {e}"
+                                    )
+                            else:
+                                # Add to offline queue for later
+                                logger.warning(
+                                    f"[UPLOAD] Upload failed, moving to offline queue: {video_path.name}"
+                                )
+                                self.offline_queue.add(video_path)
+                                with self._video_chunks_lock:
+                                    if video_path in self.video_chunks:
+                                        self.video_chunks.remove(video_path)
+                        else:
+                            logger.warning(
+                                f"[UPLOAD] Chunk file missing, removing from tracking: {video_path.name}"
+                            )
+                            with self._video_chunks_lock:
+                                if video_path in self.video_chunks:
+                                    self.video_chunks.remove(video_path)
 
                 # Wait for next interval
                 logger.debug(
@@ -1521,6 +1581,7 @@ class HiddenRunner:
 
             logger.info("[HIDDEN_RUNNER] Creating ScreenRecorder instance")
             self.recorder = ScreenRecorder()
+            self.recorder._owner_runner = self  # Allow signal handler to stop runner loop
 
             # Validate license
             logger.info("[HIDDEN_RUNNER] Validating license...")

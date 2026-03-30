@@ -39,6 +39,11 @@ echo Press Ctrl+C to stop the server
 echo ================================================
 echo.
 
+if exist "migrations" (
+    echo Running database migrations...
+    flask db upgrade
+)
+
 python app.py
 
 pause

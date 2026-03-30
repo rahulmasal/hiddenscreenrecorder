@@ -53,9 +53,13 @@ class LicenseManager:
         return private_pem.decode(), public_pem.decode()
 
     @staticmethod
-    def generate_fernet_key():
-        """Generate a Fernet key for symmetric encryption"""
-        return Fernet.generate_key()
+    def generate_fernet_key() -> str:
+        """Generate a Fernet key for symmetric encryption
+
+        Returns:
+            str: Base64-encoded Fernet key as a string
+        """
+        return Fernet.generate_key().decode("utf-8")
 
     def load_private_key(self, private_key_pem):
         """Load private key from PEM string"""
@@ -167,6 +171,9 @@ class LicenseManager:
 
             # Check expiration
             expires_at = datetime.fromisoformat(license_data["expires_at"])
+            # Handle offset-naive datetimes from older licenses by assuming UTC
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > expires_at:
                 return False, "License has expired"
 
