@@ -339,9 +339,10 @@ See [`server/migrations/README.md`](server/migrations/README.md) for detailed mi
    Save the license key to `license.key` file in the client directory
 
 5. **Run the client:**
-   
+  
    ```bash
    python screen_recorder.py
+
 ```
 
 ### Building the Client Executable
@@ -353,14 +354,14 @@ See [`server/migrations/README.md`](server/migrations/README.md) for detailed mi
    python app.py
    ```
 
-2. **Build the client:**
+1. **Build the client:**
 
    ```bash
    cd ..
    python build_client.py
    ```
 
-3. **The built files will be in the `dist` directory:**
+2. **The built files will be in the `dist` directory:**
    - `ScreenRecorderClient.exe` - The client executable
    - `install_client_service.bat` - Installation script
    - `uninstall_client_service.bat` - Uninstallation script

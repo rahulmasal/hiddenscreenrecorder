@@ -18,9 +18,10 @@ If you have Docker installed, this is the easiest way:
 2. Right-click the ZIP file → "Extract All..."
 3. Open Command Prompt (or PowerShell)
 4. Navigate to the folder:
-   
+  
    ```bash
    cd Desktop\ScreenRecorderApp
+
 ```
    
 5. Start the server with Docker:
@@ -29,7 +30,7 @@ If you have Docker installed, this is the easiest way:
 docker-compose up -d
 ```
 
-6. Wait for the download and setup to complete (1-2 minutes first time)
+1. Wait for the download and setup to complete (1-2 minutes first time)
 
 ### Option B: Manual Installation
 
@@ -77,10 +78,11 @@ If you don't have Docker, follow these steps:
 3. Right-click "Command Prompt"
 4. Select "Run as administrator"
 5. Type these commands:
-   
+  
    ```batch
    sc stop ScreenRecorderServer
    sc start ScreenRecorderServer
+
 ```
 
 ### Step 6: Access Admin Dashboard

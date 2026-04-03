@@ -86,10 +86,11 @@ Docker provides an easy way to run the server without installing Python or manag
    - Save the file
 
 3. **Restart the server:**
-   
+  
    ```bash
 cd ..
    docker-compose restart
+
    ```
 
 ### Step 5: Access the Admin Dashboard

@@ -129,9 +129,10 @@ If you prefer to run the client as a Python script:
    ```
 
 5. **Run as background process (optional):**
-   
+  
    ```batch
    pythonw screen_recorder.py
+
 ```
 
 ## Step 4: Verify Installation
@@ -161,7 +162,7 @@ If you prefer to run the client as a Python script:
 
 - You should see messages like "License validated successfully" and "Recording started"
 
-3. **Verify on server:**
+1. **Verify on server:**
    - Go to the server admin dashboard
    - You should see your client listed
    - The client should show as "Active"
@@ -216,10 +217,11 @@ If you prefer to run the client as a Python script:
    - Close Notepad
 
 5. **Restart the service:**
-   
+  
    ```batch
    sc stop ScreenRecSvc
    sc start ScreenRecSvc
+
 ```
 
 ## Troubleshooting
