@@ -86,8 +86,9 @@ Docker provides an easy way to run the server without installing Python or manag
    - Save the file
 
 3. **Restart the server:**
+   
    ```bash
-   cd ..
+cd ..
    docker-compose restart
    ```
 
@@ -284,9 +285,11 @@ If you prefer not to use Docker, follow these steps:
 
 - Check if port 5000 is already in use
 - Open Command Prompt as Administrator and run:
-  ```batch
+  
+```batch
   netstat -ano | findstr :5000
   ```
+
 - If you see a process using port 5000, stop it or change the port in `.env` file
 
 #### Problem: Can't access admin dashboard

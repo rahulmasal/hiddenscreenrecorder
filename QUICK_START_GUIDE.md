@@ -18,13 +18,17 @@ If you have Docker installed, this is the easiest way:
 2. Right-click the ZIP file → "Extract All..."
 3. Open Command Prompt (or PowerShell)
 4. Navigate to the folder:
+   
    ```bash
    cd Desktop\ScreenRecorderApp
-   ```
+```
+   
 5. Start the server with Docker:
+   
    ```bash
-   docker-compose up -d
-   ```
+docker-compose up -d
+```
+
 6. Wait for the download and setup to complete (1-2 minutes first time)
 
 ### Option B: Manual Installation
@@ -73,10 +77,11 @@ If you don't have Docker, follow these steps:
 3. Right-click "Command Prompt"
 4. Select "Run as administrator"
 5. Type these commands:
+   
    ```batch
    sc stop ScreenRecorderServer
    sc start ScreenRecorderServer
-   ```
+```
 
 ### Step 6: Access Admin Dashboard
 
@@ -113,15 +118,15 @@ If you don't have Docker, follow these steps:
 
 ### Step 3: Install the Client
 
-1.  Open the "ScreenRecorderApp" folder
-2.  Open the "client" folder
-3.  Create a new file named `license.key`
-4.  Open the file with Notepad
-5.  Paste the license key from Step 2
-6.  Save the file (`Ctrl + S`)
-7.  Close Notepad
-8.  Right-click `install_client_service.bat`
-9.  Select "Run as administrator"
+1. Open the "ScreenRecorderApp" folder
+2. Open the "client" folder
+3. Create a new file named `license.key`
+4. Open the file with Notepad
+5. Paste the license key from Step 2
+6. Save the file (`Ctrl + S`)
+7. Close Notepad
+8. Right-click `install_client_service.bat`
+9. Select "Run as administrator"
 10. Click "Yes" if Windows asks for permission
 11. Wait for installation to complete
 

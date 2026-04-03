@@ -129,9 +129,10 @@ If you prefer to run the client as a Python script:
    ```
 
 5. **Run as background process (optional):**
+   
    ```batch
    pythonw screen_recorder.py
-   ```
+```
 
 ## Step 4: Verify Installation
 
@@ -158,7 +159,7 @@ If you prefer to run the client as a Python script:
    type "C:\ScreenRecorderClient\logs\service_error.log"
    ```
 
-   - You should see messages like "License validated successfully" and "Recording started"
+- You should see messages like "License validated successfully" and "Recording started"
 
 3. **Verify on server:**
    - Go to the server admin dashboard
@@ -215,10 +216,11 @@ If you prefer to run the client as a Python script:
    - Close Notepad
 
 5. **Restart the service:**
+   
    ```batch
    sc stop ScreenRecSvc
    sc start ScreenRecSvc
-   ```
+```
 
 ## Troubleshooting
 
@@ -243,11 +245,13 @@ If you prefer to run the client as a Python script:
 **Solution:**
 
 - Check the logs:
+
   ```batch
   type "C:\ScreenRecorderClient\ScreenRecSvc\client.log"
   type "C:\ScreenRecorderClient\ScreenRecSvc\crash.log"
   type "C:\ScreenRecorderClient\logs\service.log"
   ```
+
 - Make sure Python is installed
 - Try running the client manually: `python screen_recorder.py`
 

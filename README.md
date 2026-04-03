@@ -339,9 +339,10 @@ See [`server/migrations/README.md`](server/migrations/README.md) for detailed mi
    Save the license key to `license.key` file in the client directory
 
 5. **Run the client:**
+   
    ```bash
    python screen_recorder.py
-   ```
+```
 
 ### Building the Client Executable
 

@@ -2,7 +2,8 @@
 
 ## Overview
 
-The Screen Recorder Server provides a RESTful API for video uploads, license management, and client communication.
+The Screen Recorder Server provides a RESTful API for video uploads,
+license management, and client communication.
 
 **Base URL:** `http://your-server:5000`
 
@@ -14,26 +15,34 @@ The Screen Recorder Server provides a RESTful API for video uploads, license man
 
 ### License-Based Authentication
 
-Most API endpoints require a valid license key. Include the license in requests using one of these methods:
+Most API endpoints require a valid license key. Include the license
+in requests using one of these methods:
 
 **Header (Preferred):**
 
-```
-X-License-Key: <your-license-key>
+```text
+
+X-License-Key: `your-license-key`
+
 X-Machine-ID: <your-machine-id>
+
 ```
 
 Or alternatively:
 
-```
-X-License-Token: <your-license-key>
+```text
+
+X-License-Token: `your-license-key`
+
 X-Machine-ID: <your-machine-id>
+
 ```
+
 
 **Form Data:**
 
 ```
-license: <your-license-key>
+license: `your-license-key`
 machine_id: <your-machine-id>
 ```
 
