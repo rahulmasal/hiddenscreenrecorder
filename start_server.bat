@@ -23,7 +23,7 @@ pip install -r requirements.txt -q
 if not exist ".env" (
     echo Creating default .env file...
     echo SECRET_KEY=change-this-to-secure-random-string > .env
-    echo ADMIN_PASSWORD=admin123 >> .env
+    echo ADMIN_PASSWORD=changeme123456 >> .env
     echo PORT=5000 >> .env
 )
 
@@ -33,7 +33,7 @@ echo   Starting Server
 echo ================================================
 echo.
 echo Admin Dashboard: http://localhost:5000/admin
-echo Admin Password: admin123 (change in .env file)
+echo Admin Password: changeme123456 (change in .env file)
 echo.
 echo Press Ctrl+C to stop the server
 echo ================================================

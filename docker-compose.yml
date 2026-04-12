@@ -63,12 +63,7 @@ services:
   #   networks:
   #     - screenrecorder
 
+
 networks:
   screenrecorder:
     driver: bridge
-
-volumes:
-  data:
-  uploads:
-  licenses:
-  keys:

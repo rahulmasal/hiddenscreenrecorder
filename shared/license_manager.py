@@ -223,7 +223,7 @@ class MachineIdentifier:
             ) as key:
                 machine_guid, _ = winreg.QueryValueEx(key, "MachineGuid")
                 machine_info.append(machine_guid)
-        except:
+        except Exception:
             pass
 
         # Create hash

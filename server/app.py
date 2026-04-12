@@ -598,9 +598,20 @@ def create_templates():
     <script>
     function copyToClipboard() {
         const textarea = document.querySelector('textarea');
-        textarea.select();
-        document.execCommand('copy');
-        alert('License key copied to clipboard!');
+        const text = textarea.value;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+                alert('License key copied to clipboard!');
+            }).catch(function() {
+                textarea.select();
+                document.execCommand('copy');
+                alert('License key copied to clipboard!');
+            });
+        } else {
+            textarea.select();
+            document.execCommand('copy');
+            alert('License key copied to clipboard!');
+        }
     }
     </script>
 </body>
@@ -1023,10 +1034,11 @@ def admin_logs():
         # Check details dict first (heartbeat stores machine_id there)
         if log.details and "machine_id" in log.details:
             mid = log.details["machine_id"]
-            machine_id_label = (mid[:16] + "...") if len(mid) > 16 else mid
+            if mid:
+                machine_id_label = (mid[:16] + "...") if len(mid) > 16 else mid
         elif log.action == "video_upload" and log.entity_id:
             video = db.session.get(Video, log.entity_id)
-            if video and video.client:
+            if video and video.client and video.client.machine_id:
                 machine_id_label = video.client.machine_id[:16] + "..."
         log_data.append(
             {
