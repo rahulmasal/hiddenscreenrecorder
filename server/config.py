@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default_factory=lambda: secrets.token_hex(32))
     admin_password: str = Field(default="changeme123456")  # Should be set via env
     session_timeout: int = Field(default=3600, description="Session timeout in seconds")
+    cors_origins: list = Field(default_factory=lambda: ["*"], description="Allowed CORS origins")
 
     # File paths
     upload_folder: Path = Field(default=Path("uploads"))

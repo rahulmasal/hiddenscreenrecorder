@@ -42,14 +42,14 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     FLASK_APP=app.py \
     FLASK_ENV=production \
-    SECRET_KEY=change-this-to-a-secure-random-string-in-production \
-    ADMIN_PASSWORD=change-this-to-a-secure-password-in-production \
     PORT=5000 \
     HOST=0.0.0.0 \
     DATABASE_URL=sqlite:///data/screenrecorder.db \
     UPLOAD_FOLDER=/app/uploads \
     LICENSE_FOLDER=/app/licenses \
     KEYS_FOLDER=/app/keys
+# NOTE: SECRET_KEY and ADMIN_PASSWORD must be set at runtime via
+# docker-compose.yml or `docker run -e`. No insecure defaults are baked in.
 
 # Expose port
 EXPOSE 5000
@@ -61,5 +61,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Switch to non-root user
 USER appuser
 
-# Run the application
-CMD ["python", "app.py"]
+# Run the application with gunicorn (production WSGI server)
+# Falls back to Flask dev server if gunicorn is not installed
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "app:app"]

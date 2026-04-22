@@ -9,8 +9,11 @@
         <div class="container">
             <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
             <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
+                <a href="/admin/generate-license" class="btn btn-success btn-sm me-2">Generate License</a>
+                <form action="/admin/logout" method="POST" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-outline-light btn-sm">Logout</button>
+                </form>
             </div>
         </div>
     </nav>
@@ -38,9 +41,20 @@
     <script>
     function copyToClipboard() {
         const textarea = document.querySelector('textarea');
-        textarea.select();
-        document.execCommand('copy');
-        alert('License key copied to clipboard!');
+        const text = textarea.value;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+                alert('License key copied to clipboard!');
+            }).catch(function() {
+                textarea.select();
+                document.execCommand('copy');
+                alert('License key copied to clipboard!');
+            });
+        } else {
+            textarea.select();
+            document.execCommand('copy');
+            alert('License key copied to clipboard!');
+        }
     }
     </script>
 </body>

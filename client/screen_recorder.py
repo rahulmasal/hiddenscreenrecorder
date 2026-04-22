@@ -131,7 +131,6 @@ try:
     import queue
     import random
     import subprocess
-    import os
     import wave
     from datetime import datetime, timezone
     from io import BytesIO

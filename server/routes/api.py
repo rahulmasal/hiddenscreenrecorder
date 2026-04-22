@@ -28,7 +28,7 @@ else:
 
 from config import settings
 from models import db, Client, License, Video, AuditLog
-from auth import auth_manager, require_auth, rate_limit
+from auth import auth_manager, require_auth, rate_limit, get_client_ip
 from validators import InputValidator, validate_request_data
 
 logger = logging.getLogger(__name__)
@@ -113,15 +113,6 @@ def log_audit(
         logger.error(f"Failed to log audit: {e}")
 
 
-def get_client_ip() -> str:
-    """Get the real client IP address"""
-    if request.headers.get("X-Forwarded-For"):
-        return request.headers["X-Forwarded-For"].split(",")[0].strip()
-    elif request.headers.get("X-Real-IP"):
-        return request.headers["X-Real-IP"]
-    return request.remote_addr or "unknown"
-
-
 # ============ License Validation Decorator ============
 
 
@@ -143,18 +134,22 @@ def validate_license_in_request(fn):
         if not license_key and not license_token:
             return jsonify({"error": "License key required"}), 401
 
-        # Validate license
-        from license_manager import LicenseManager
+        # Use app-level singleton instead of creating a new instance each time
+        from flask import current_app
 
-        lm = LicenseManager()
+        lm = current_app.config.get("_license_manager")
+        if lm is None:
+            # Fallback: instantiate and cache if not yet in app config
+            from license_manager import LicenseManager
 
-        # Load public key
-        public_key_path = settings.keys_folder / "public_key.pem"
-        if public_key_path.exists():
-            with open(public_key_path, "r") as key_file:
-                lm.load_public_key(key_file.read())
-        else:
-            return jsonify({"error": "Server configuration error"}), 500
+            lm = LicenseManager()
+            public_key_path = settings.keys_folder / "public_key.pem"
+            if public_key_path.exists():
+                with open(public_key_path, "r") as key_file:
+                    lm.load_public_key(key_file.read())
+            else:
+                return jsonify({"error": "Server configuration error"}), 500
+            current_app.config["_license_manager"] = lm
 
         is_valid, result = lm.validate_license(license_key or license_token, machine_id)
 
@@ -460,7 +455,8 @@ def health_check():
 # ============ Video Streaming Routes ============
 
 
-@api_bp.route("/stream/<machine_id>/<filename>", methods=["GET"])
+@api_bp.route("/video/<machine_id>/<path:filename>")
+@require_auth
 def stream_video(machine_id: str, filename: str):
     """Stream video file with range support for partial content"""
     from flask import Response, make_response
@@ -555,7 +551,8 @@ def stream_video(machine_id: str, filename: str):
         return jsonify({"error": "Internal server error"}), 500
 
 
-@api_bp.route("/thumbnail/<machine_id>/<filename>", methods=["GET"])
+@api_bp.route("/video/<machine_id>/<path:filename>/thumbnail")
+@require_auth
 def get_thumbnail(machine_id: str, filename: str):
     """Get or generate thumbnail for a video"""
     from flask import send_file

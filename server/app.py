@@ -59,8 +59,8 @@ app.config["MAX_CONTENT_LENGTH"] = settings.max_content_length
 app.config["SQLALCHEMY_DATABASE_URI"] = settings.database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Enable CORS
-CORS(app)
+# Enable CORS with restricted origins
+CORS(app, origins=settings.cors_origins, supports_credentials=True)
 
 # Initialize database
 init_db(app)
@@ -139,545 +139,15 @@ license_manager = LicenseManager()
 license_manager.load_private_key(PRIVATE_KEY)
 
 
-# ============ Template Creation ============
+# ============ Template Setup ============
 
+# Ensure templates directory exists (templates are standalone .html files)
+Path(__file__).parent.joinpath("templates").mkdir(parents=True, exist_ok=True)
 
-def create_templates():
-    """Create HTML templates"""
-    templates_dir = Path(__file__).parent / "templates"
-    templates_dir.mkdir(parents=True, exist_ok=True)
-
-    # Templates are created only if they don't exist
-    templates = {
-        "login.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>Admin Login - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-    <div class="container mt-5">
-        <div class="row justify-content-center">
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header">
-                        <h4 class="mb-0">Admin Login</h4>
-                    </div>
-                    <div class="card-body">
-                        {% if error %}
-                        <div class="alert alert-danger">{{ error }}</div>
-                        {% endif %}
-                        <form method="POST">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <input type="password" name="password" class="form-control" required>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100">Login</button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>""",
-        "connection_logs.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>Connection Logs - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .badge-upload    { background-color:#198754; }
-        .badge-heartbeat { background-color:#0dcaf0; color:#000; }
-        .badge-validate  { background-color:#ffc107; color:#000; }
-        .badge-error     { background-color:#dc3545; }
-        .badge-other     { background-color:#6c757d; }
-        .log-row:hover   { background-color:#f8f9fa; }
-        .filter-bar      { background:#f1f3f5; border-radius:8px; padding:14px 18px; margin-bottom:18px; }
-    </style>
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/generate-license" class="btn btn-success btn-sm me-2">Generate License</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-    <div class="container mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <h4 class="mb-0">Connection &amp; Activity Logs</h4>
-            <span class="text-muted small">Showing {{ logs|length }} of {{ total_logs }} entries</span>
-        </div>
-
-        <!-- Summary cards -->
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card text-white bg-primary">
-                    <div class="card-body py-2">
-                        <h6 class="mb-0">Active Clients</h6>
-                        <h3 class="mb-0">{{ active_clients }}</h3>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-success">
-                    <div class="card-body py-2">
-                        <h6 class="mb-0">Video Uploads (24h)</h6>
-                        <h3 class="mb-0">{{ uploads_24h }}</h3>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-info" style="color:#000">
-                    <div class="card-body py-2">
-                        <h6 class="mb-0">Heartbeats (24h)</h6>
-                        <h3 class="mb-0">{{ heartbeats_24h }}</h3>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-danger">
-                    <div class="card-body py-2">
-                        <h6 class="mb-0">Errors (24h)</h6>
-                        <h3 class="mb-0">{{ errors_24h }}</h3>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Client online status -->
-        {% if clients %}
-        <div class="card mb-4">
-            <div class="card-header"><h6 class="mb-0">Client Online Status</h6></div>
-            <div class="card-body p-0">
-                <table class="table table-sm mb-0">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Machine ID</th>
-                            <th>Status</th>
-                            <th>First Seen</th>
-                            <th>Last Seen</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for c in clients %}
-                        <tr>
-                            <td><code><a href="/admin/clients/{{ c.machine_id }}">{{ c.machine_id[:16] }}...</a></code></td>
-                            <td>
-                                {% if c.online %}
-                                <span class="badge bg-success">Online</span>
-                                {% else %}
-                                <span class="badge bg-secondary">Offline</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ c.first_seen }}</td>
-                            <td>{{ c.last_seen }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Filter bar -->
-        <form method="GET" action="/admin/logs" class="filter-bar row g-2 align-items-end">
-            <div class="col-md-3">
-                <label class="form-label mb-1 small fw-bold">Event Type</label>
-                <select name="action" class="form-select form-select-sm">
-                    <option value="">All events</option>
-                    <option value="video_upload"  {% if filter_action=='video_upload'  %}selected{% endif %}>Video Upload</option>
-                    <option value="heartbeat"     {% if filter_action=='heartbeat'     %}selected{% endif %}>Heartbeat</option>
-                    <option value="license_valid" {% if filter_action=='license_valid' %}selected{% endif %}>License Valid</option>
-                    <option value="license_invalid" {% if filter_action=='license_invalid' %}selected{% endif %}>License Invalid</option>
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label mb-1 small fw-bold">Machine ID (contains)</label>
-                <input type="text" name="machine_id" class="form-control form-control-sm"
-                       value="{{ filter_machine_id }}" placeholder="e.g. abc123">
-            </div>
-            <div class="col-md-2">
-                <label class="form-label mb-1 small fw-bold">Per page</label>
-                <select name="per_page" class="form-select form-select-sm">
-                    {% for n in [25, 50, 100, 200] %}
-                    <option value="{{ n }}" {% if per_page==n %}selected{% endif %}>{{ n }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-2">
-                <button type="submit" class="btn btn-primary btn-sm w-100">Filter</button>
-            </div>
-            <div class="col-md-2">
-                <a href="/admin/logs" class="btn btn-outline-secondary btn-sm w-100">Reset</a>
-            </div>
-        </form>
-
-        <!-- Log table -->
-        <div class="card">
-            <div class="card-body p-0">
-                <table class="table table-sm table-bordered mb-0">
-                    <thead class="table-dark">
-                        <tr>
-                            <th style="width:160px">Timestamp</th>
-                            <th style="width:140px">Event</th>
-                            <th>Machine / Entity</th>
-                            <th>IP Address</th>
-                            <th>Details</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for log in logs %}
-                        <tr class="log-row">
-                            <td class="text-nowrap small">{{ log.timestamp }}</td>
-                            <td>
-                                {% if log.action == 'video_upload' %}
-                                    <span class="badge badge-upload">Upload</span>
-                                {% elif log.action == 'heartbeat' %}
-                                    <span class="badge badge-heartbeat">Heartbeat</span>
-                                {% elif 'license' in log.action %}
-                                    <span class="badge badge-validate">{{ log.action }}</span>
-                                {% elif 'error' in log.action %}
-                                    <span class="badge badge-error">Error</span>
-                                {% else %}
-                                    <span class="badge badge-other">{{ log.action }}</span>
-                                {% endif %}
-                            </td>
-                            <td class="small"><code>{{ log.machine_id or (log.entity_type + ' #' + (log.entity_id|string)) }}</code></td>
-                            <td class="small">{{ log.ip_address or '-' }}</td>
-                            <td class="small">
-                                {% if log.details %}
-                                    {% for k, v in log.details.items() %}
-                                        <span class="text-muted">{{ k }}:</span> {{ v }}&nbsp;
-                                    {% endfor %}
-                                {% else %}-{% endif %}
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="5" class="text-center text-muted py-4">No log entries found</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Pagination -->
-        {% if total_pages > 1 %}
-        <nav class="mt-3">
-            <ul class="pagination pagination-sm justify-content-center">
-                {% for p in range(1, total_pages + 1) %}
-                <li class="page-item {% if p == page %}active{% endif %}">
-                    <a class="page-link"
-                       href="/admin/logs?page={{ p }}&per_page={{ per_page }}&action={{ filter_action }}&machine_id={{ filter_machine_id }}"
-                    >{{ p }}</a>
-                </li>
-                {% endfor %}
-            </ul>
-        </nav>
-        {% endif %}
-    </div>
-    <script>
-        // Auto-refresh every 30 seconds
-        setTimeout(() => location.reload(), 30000);
-    </script>
-</body>
-</html>""",
-        "dashboard.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>Dashboard - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/generate-license" class="btn btn-success btn-sm me-2">Generate License</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-    <div class="container mt-4">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card text-white bg-primary">
-                    <div class="card-body">
-                        <h6>Total Clients</h6>
-                        <h2>{{ total_clients }}</h2>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-success">
-                    <div class="card-body">
-                        <h6>Total Videos</h6>
-                        <h2>{{ total_videos }}</h2>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-info">
-                    <div class="card-body">
-                        <h6>Total Storage</h6>
-                        <h2>{{ "%.2f"|format(total_size / 1024 / 1024 / 1024) }} GB</h2>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card text-white bg-secondary">
-                    <div class="card-body">
-                        <h6>Active Licenses</h6>
-                        <h2>{{ licenses|length }}</h2>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="row">
-            <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header"><h5>Clients</h5></div>
-                    <div class="card-body">
-                        {% if clients %}
-                        <table class="table">
-                            <thead><tr><th>Machine ID</th><th>Videos</th><th>Storage</th><th>Actions</th></tr></thead>
-                            <tbody>
-                                {% for client in clients %}
-                                <tr>
-                                    <td><code>{{ client.machine_id[:12] }}...</code></td>
-                                    <td>{{ client.video_count }}</td>
-                                    <td>{{ "%.2f"|format(client.total_size / 1024 / 1024) }} MB</td>
-                                    <td><a href="/admin/clients/{{ client.machine_id }}" class="btn btn-sm btn-primary">View</a></td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                        {% else %}
-                        <p class="text-muted">No clients yet</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header"><h5>Licenses</h5></div>
-                    <div class="card-body">
-                        {% if licenses %}
-                        <table class="table table-sm">
-                            <thead><tr><th>Machine ID</th><th>Expires</th><th>Actions</th></tr></thead>
-                            <tbody>
-                                {% for license in licenses %}
-                                <tr>
-                                    <td><code>{{ license.machine_id[:8] }}...</code></td>
-                                    <td>{{ license.expires_at[:10] }}</td>
-                                    <td>
-                                        <form action="/admin/delete-license/{{ license.machine_id }}" method="POST" style="display:inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this license?')">Delete</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                        {% else %}
-                        <p class="text-muted">No licenses yet</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>""",
-        "generate_license.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>Generate License - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-    <div class="container mt-4">
-        <div class="row justify-content-center">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header"><h5>Generate New License</h5></div>
-                    <div class="card-body">
-                        <form method="POST">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <div class="mb-3">
-                                <label class="form-label">Machine ID</label>
-                                <input type="text" name="machine_id" class="form-control" required placeholder="Enter client machine ID">
-                                <small class="text-muted">Run the client with --get-id to get the machine ID</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Expiry (Days)</label>
-                                <input type="number" name="expiry_days" class="form-control" value="365" min="1">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Features</label>
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" name="features" value="recording" checked>
-                                    <label class="form-check-label">Recording</label>
-                                </div>
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" name="features" value="upload" checked>
-                                    <label class="form-check-label">Upload</label>
-                                </div>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100">Generate License</button>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
-</html>""",
-        "license_result.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>License Generated - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-    <div class="container mt-4">
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header bg-success text-white"><h5>License Generated Successfully</h5></div>
-                    <div class="card-body">
-                        <p><strong>Machine ID:</strong> <code>{{ license_info.machine_id }}</code></p>
-                        <p><strong>Expires:</strong> {{ license_info.expires_at }}</p>
-                        <p><strong>Features:</strong> {{ license_info.features }}</p>
-                        <hr>
-                        <label class="form-label"><strong>License Key (save as license.key):</strong></label>
-                        <textarea class="form-control" rows="5" readonly>{{ license_info.license_key }}</textarea>
-                        <div class="mt-3">
-                            <button onclick="copyToClipboard()" class="btn btn-primary">Copy to Clipboard</button>
-                            <a href="/admin" class="btn btn-secondary">Back to Dashboard</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script>
-    function copyToClipboard() {
-        const textarea = document.querySelector('textarea');
-        const text = textarea.value;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(function() {
-                alert('License key copied to clipboard!');
-            }).catch(function() {
-                textarea.select();
-                document.execCommand('copy');
-                alert('License key copied to clipboard!');
-            });
-        } else {
-            textarea.select();
-            document.execCommand('copy');
-            alert('License key copied to clipboard!');
-        }
-    }
-    </script>
-</body>
-</html>""",
-        "client.html": """<!DOCTYPE html>
-<html>
-<head>
-    <title>Client {{ machine_id }} - Screen Recorder Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body>
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container">
-            <a class="navbar-brand" href="/admin">Screen Recorder Admin</a>
-            <div>
-                <a href="/admin/logs" class="btn btn-outline-info btn-sm me-2">Logs</a>
-                <a href="/admin/logout" class="btn btn-outline-light btn-sm">Logout</a>
-            </div>
-        </div>
-    </nav>
-    <div class="container mt-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h2>Client: <code>{{ machine_id }}</code></h2>
-            <a href="/admin" class="btn btn-secondary">Back to Dashboard</a>
-        </div>
-        {% if videos %}
-        <table class="table">
-            <thead><tr><th>Filename</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead>
-            <tbody>
-                {% for video in videos %}
-                <tr>
-                    <td>{{ video.filename }}</td>
-                    <td>{{ "%.2f"|format(video.size / 1024 / 1024) }} MB</td>
-                    <td>{{ video.created }}</td>
-                    <td>
-                        <a href="/admin/download/{{ machine_id }}/{{ video.filename }}" class="btn btn-sm btn-success">Download</a>
-                        <form action="/admin/delete-video/{{ machine_id }}/{{ video.filename }}" method="POST" style="display:inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this video?')">Delete</button>
-                        </form>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <div class="alert alert-info">No videos uploaded yet</div>
-        {% endif %}
-    </div>
-</body>
-</html>""",
-    }
-
-    for name, content in templates.items():
-        template_path = templates_dir / name
-        # Always overwrite so code changes to templates take effect (#15 fix)
-        with open(template_path, "w") as f:
-            f.write(content)
-
-    # Add datetime filter
-    app.jinja_env.filters["datetime"] = lambda x: (
-        datetime.fromtimestamp(x).strftime("%Y-%m-%d %H:%M:%S") if x else "N/A"
-    )
-
-
-create_templates()
+# Add datetime filter for Jinja templates
+app.jinja_env.filters["datetime"] = lambda x: (
+    datetime.fromtimestamp(x).strftime("%Y-%m-%d %H:%M:%S") if x else "N/A"
+)
 
 
 # ============ Admin Routes ============
@@ -706,9 +176,10 @@ def admin_login():
     )
 
 
-@app.route("/admin/logout")
+@app.route("/admin/logout", methods=["POST"])
+@require_csrf
 def admin_logout():
-    """Admin logout"""
+    """Admin logout (requires POST for CSRF protection)"""
     destroy_session()
     return redirect(url_for("admin_login"))
 
@@ -726,45 +197,40 @@ def admin_dashboard():
         .all()
     )
 
-    licenses = (
-        db.session.execute(db.select(License).where(License.is_active == True))
-        .scalars()
-        .all()
-    )
+    # Get active licenses
+    licenses = db.session.execute(
+        db.select(License).where(License.expires_at > datetime.now(timezone.utc))
+    ).scalars().all()
 
-    total_videos = db.session.execute(db.select(db.func.count(Video.id))).scalar() or 0
+    # Get aggregated video statistics
+    from sqlalchemy import func
+    video_stats = db.session.execute(
+        db.select(
+            Video.client_id,
+            func.count(Video.id).label('video_count'),
+            func.sum(Video.file_size).label('total_size')
+        ).group_by(Video.client_id)
+    ).all()
+    
+    # Map stats by client_id
+    stats_map = {stat.client_id: {'video_count': stat.video_count, 'total_size': stat.total_size or 0} for stat in video_stats}
 
-    total_size = (
-        db.session.execute(db.select(db.func.sum(Video.file_size))).scalar() or 0
-    )
-
-    # Get client video counts
+    # Prepare client data
     client_data = []
     for client in clients:
-        video_count = (
-            db.session.execute(
-                db.select(db.func.count(Video.id)).where(Video.client_id == client.id)
-            ).scalar()
-            or 0
-        )
-
-        storage = (
-            db.session.execute(
-                db.select(db.func.sum(Video.file_size)).where(
-                    Video.client_id == client.id
-                )
-            ).scalar()
-            or 0
-        )
-
+        stats = stats_map.get(client.id, {'video_count': 0, 'total_size': 0})
         client_data.append(
             {
                 "machine_id": client.machine_id,
-                "video_count": video_count,
-                "total_size": storage,
+                "video_count": stats['video_count'],
+                "total_size": stats['total_size'],
                 "last_seen": client.last_seen,
             }
         )
+
+    # Calculate overall totals
+    total_videos = sum(c["video_count"] for c in client_data)
+    total_size = sum(c["total_size"] for c in client_data)
 
     return render_template(
         "dashboard.html",
@@ -1019,13 +485,19 @@ def admin_logs():
 
     # ---- Build log query with optional filters ----
     log_query = db.select(AuditLog).order_by(AuditLog.timestamp.desc())
+    count_query = db.select(db.func.count(AuditLog.id))
+
     if filter_action:
         log_query = log_query.where(AuditLog.action == filter_action)
+        count_query = count_query.where(AuditLog.action == filter_action)
 
-    # Fetch all matching logs (before pagination) so we can resolve and filter machine_id
-    logs_raw = (
-        db.session.execute(log_query).scalars().all()
-    )
+    # Get total count via SQL (never loads all rows into memory)
+    total_logs = db.session.execute(count_query).scalar() or 0
+    total_pages = max(1, (total_logs + per_page - 1) // per_page)
+
+    # Apply SQL-level pagination
+    log_query = log_query.limit(per_page).offset(offset)
+    logs_raw = db.session.execute(log_query).scalars().all()
 
     # Resolve machine_id for each log via details or entity_id
     log_data = []
@@ -1040,6 +512,12 @@ def admin_logs():
             video = db.session.get(Video, log.entity_id)
             if video and video.client and video.client.machine_id:
                 machine_id_label = video.client.machine_id[:16] + "..."
+
+        # If a machine_id text filter is active, skip non-matching rows
+        if filter_machine_id:
+            if not machine_id_label or filter_machine_id.lower() not in machine_id_label.lower():
+                continue
+
         log_data.append(
             {
                 "timestamp": (
@@ -1053,18 +531,6 @@ def admin_logs():
                 "details": log.details or {},
             }
         )
-
-    # Filter by machine_id BEFORE pagination so counts are correct (#11 fix)
-    if filter_machine_id:
-        log_data = [
-            l
-            for l in log_data
-            if l["machine_id"] and filter_machine_id.lower() in l["machine_id"].lower()
-        ]
-
-    total_logs = len(log_data)
-    total_pages = max(1, (total_logs + per_page - 1) // per_page)
-    log_data = log_data[offset : offset + per_page]
 
     return render_template(
         "connection_logs.html",

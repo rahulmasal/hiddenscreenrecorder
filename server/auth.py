@@ -93,14 +93,6 @@ class AuthManager:
         self.token_expiry = settings.session_timeout
         self.algorithm = "HS256"
 
-    def hash_password(self, password: str) -> str:
-        """Hash a password using werkzeug's secure scrypt"""
-        return generate_password_hash(password, method="scrypt")
-
-    def verify_password(self, password: str, password_hash: str) -> bool:
-        """Verify a password against its hash using constant-time comparison"""
-        return PasswordSecurity.verify_password(password, password_hash)
-
     def generate_token(self, user_id: str, expires_in: Optional[int] = None) -> str:
         """Generate a JWT token with unique ID for tracking"""
         if expires_in is None:

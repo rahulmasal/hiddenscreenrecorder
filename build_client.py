@@ -69,7 +69,7 @@ a = Analysis(
     ['screen_recorder.py'],
     pathex=[],
     binaries=[],
-    datas=[('public_key.pem', '.'), ('license.key', '.') if os.path.exists('license.key') else None],
+    datas=[('public_key.pem', '.')] + ([('license.key', '.')] if os.path.exists('license.key') else []),
     hiddenimports=['win32timezone', 'win32service', 'win32serviceutil', 'win32event', 'servicemanager'],
     hookspath=[],
     hooksconfig={},

@@ -131,7 +131,7 @@ class TestInputValidator:
 
     def test_validate_license_key_invalid_base64(self):
         """Test license key with invalid base64"""
-        invalid_key = "not_valid_base64!!!"
+        invalid_key = "not_valid_base64!!!" * 10
         is_valid, error = InputValidator.validate_license_key(invalid_key)
 
         assert is_valid is False

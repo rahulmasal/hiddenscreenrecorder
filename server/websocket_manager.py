@@ -4,7 +4,7 @@ Handles real-time communication with clients using Socket.IO
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Set
 from dataclasses import dataclass, field
 import threading
@@ -27,8 +27,8 @@ class ClientConnection:
 
     sid: str
     machine_id: str
-    connected_at: datetime = field(default_factory=datetime.utcnow)
-    last_heartbeat: datetime = field(default_factory=datetime.utcnow)
+    connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_heartbeat: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -58,9 +58,10 @@ class WebSocketManager:
             return False
 
         try:
+            from config import settings
             self.socketio = SocketIO(
                 app,
-                cors_allowed_origins="*",
+                cors_allowed_origins=settings.cors_origins,
                 async_mode="threading",
                 logger=False,
                 engineio_logger=False,
@@ -152,7 +153,7 @@ class WebSocketManager:
 
             with self._lock:
                 if sid in self.clients:
-                    self.clients[sid].last_heartbeat = datetime.utcnow()
+                    self.clients[sid].last_heartbeat = datetime.now(timezone.utc)
                     self.clients[sid].metadata.update(data)
 
             # Broadcast to admins
@@ -202,7 +203,7 @@ class WebSocketManager:
         message = {
             "machine_id": machine_id,
             "status": status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             **(data or {}),
         }
         self._broadcast_to_admins("client_status", message)
@@ -225,7 +226,7 @@ class WebSocketManager:
                 "machine_id": machine_id,
                 "filename": filename,
                 "file_size": file_size,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         )
 

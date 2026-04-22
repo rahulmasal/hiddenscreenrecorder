@@ -61,7 +61,7 @@ class InputValidator:
         try:
             import base64
 
-            base64.b64decode(license_key)
+            base64.b64decode(license_key, validate=True)
         except Exception:
             return False, "License key must be valid base64 encoded"
 

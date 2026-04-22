@@ -67,3 +67,9 @@ instance/
 
 # Qodo
 .qodo/
+
+# Third-party binaries (download separately)
+nssm.exe
+
+# Stale review artifacts
+code_review_results.txt
