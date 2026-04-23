@@ -650,11 +650,19 @@ docker-compose up -d --build
 
 ### Client PC
 
-| File/Folder        | Location                                        | Purpose                   |
-| ------------------ | ----------------------------------------------- | ------------------------- |
-| screen_recorder.py | C:\ShadowCapClient\                             | Main client script        |
-| license.key        | C:\ShadowCapClient\                             | License file              |
-| public_key.pem     | C:\ShadowCapClient\                             | Public key for validation |
+| File/Folder        | Location                                        | Purpose                        |
+| ------------------ | ----------------------------------------------- | ------------------------------ |
+| screen_recorder.py | C:\ShadowCapClient\                             | Main client script             |
+| logging_setup.py   | C:\ShadowCapClient\                             | Early crash logging & log dirs |
+| client_config.py   | C:\ShadowCapClient\                             | Config, ClientState, UploadTask|
+| retry_handler.py   | C:\ShadowCapClient\                             | Exponential backoff & throttle |
+| offline_queue.py   | C:\ShadowCapClient\                             | Offline video queue management |
+| heartbeat.py       | C:\ShadowCapClient\                             | Server heartbeat communication |
+| audio_recorder.py  | C:\ShadowCapClient\                             | Audio recording module         |
+| video_compressor.py| C:\ShadowCapClient\                             | FFmpeg / OpenCV compression    |
+| monitor_manager.py | C:\ShadowCapClient\                             | Multi-monitor detection        |
+| license.key        | C:\ShadowCapClient\                             | License file                   |
+| public_key.pem     | C:\ShadowCapClient\                             | Public key for validation      |
 | config.json        | C:\ShadowCapClient\ScreenRecSvc\                | Configuration             |
 | Recordings (temp)  | C:\ShadowCapClient\ScreenRecSvc\recordings\     | Local video storage       |
 | Offline Queue      | C:\ShadowCapClient\ScreenRecSvc\offline_queue\  | Pending uploads           |

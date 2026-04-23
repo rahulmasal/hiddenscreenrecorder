@@ -346,6 +346,11 @@ pytest tests/ -v -m "not screen_capture and not audio and not network"
 ShadowCap/
 ├── client/                     # 🖥️ Client (Windows agent)
 │   ├── screen_recorder.py      # Main recorder — capture, upload, license
+│   ├── logging_setup.py        # Early crash logging & log directory setup
+│   ├── client_config.py        # Config, ClientState, UploadTask
+│   ├── retry_handler.py        # Exponential backoff & throttled uploads
+│   ├── offline_queue.py        # Offline video queue management
+│   ├── heartbeat.py            # Server heartbeat communication
 │   ├── audio_recorder.py       # Audio recording module
 │   ├── video_compressor.py     # FFmpeg / OpenCV compression
 │   ├── monitor_manager.py      # Multi-monitor detection & selection
@@ -373,8 +378,13 @@ ShadowCap/
 │
 ├── tests/                      # 🧪 Test suite
 │   ├── conftest.py             # Pytest fixtures & configuration
+│   ├── test_integration.py     # Server API integration tests
 │   ├── test_license_manager.py # License system tests
-│   └── test_validators.py      # Input validation tests
+│   ├── test_validators.py      # Input validation tests
+│   ├── test_auth.py            # Authentication & password tests
+│   ├── test_models.py          # Database model tests
+│   ├── test_retry_handler.py   # Retry logic tests
+│   └── test_offline_queue.py   # Offline queue tests
 │
 ├── docker-compose.yml          # Docker Compose orchestration
 ├── nginx.conf                  # Nginx reverse proxy config
